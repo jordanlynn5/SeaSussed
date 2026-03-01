@@ -1,0 +1,35 @@
+# Claude Code
+.claude/settings.local.json
+.claude/cc-rpi-sync.json
+
+# Blueprint reference (not part of the project)
+cc-rpi/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.env
+*.env
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Data (built locally from scripts)
+backend/data/seafood.db
+
+# Node / Extension dev
+node_modules/
+*.log
+
+# macOS
+.DS_Store
+
+# Google Cloud
+.gcloudignore
