@@ -1,0 +1,619 @@
+================================================================================
+SEASUSSED — PROJECT PROGRESS & IMPLEMENTATION PLAN
+================================================================================
+Chrome Extension + Cloud Run Backend for Real-Time Seafood Sustainability Scores
+Hackathon: Gemini Live Agent Challenge — UI Navigator Category
+Deadline: March 16, 2026 5:00 PM PDT (Submit by March 15 for safety buffer)
+GitHub: https://github.com/jordanlynn5/SeaSussed
+GCP Project: seasussed-hackathon
+================================================================================
+
+WHAT WE'RE BUILDING
+-------------------
+A Chrome extension + Cloud Run Python backend that:
+1. Opens a persistent side panel when the toolbar icon is clicked
+2. Captures a screenshot of any grocery product page on user request
+3. Uses Gemini 2.5 Flash (via Google ADK) to identify species, origin, method, certs
+4. Scrapes visible related product names from the DOM for alternative scoring
+5. Scores the product 0–100 across four sustainability dimensions (pure Python math)
+6. Generates a 2–3 sentence explanation via a direct Gemini call
+7. Displays grade (A–D), score breakdown, alternatives, and "Not right?" correction
+
+Works on ANY grocery site — Whole Foods, Amazon Fresh, Instacart, and more.
+Category: UI Navigator — agent reads the screen visually, not the DOM.
+
+--------------------------------------------------------------------------------
+PHASE OVERVIEW
+--------------------------------------------------------------------------------
+
+Phase | Name                          | Days  | Status    | Depends On
+------+-------------------------------+-------+-----------+-----------------
+  1   | GCP Setup & Backend Scaffold  |  1–2  | [ ] TODO  | —
+  2   | Chrome Extension Scaffold     |  2–3  | [ ] TODO  | —
+  3   | Sustainability Database       |  3–4  | [ ] TODO  | —
+  4   | Gemini Agent Pipeline         |  4–7  | [ ] TODO  | Phase 1, Phase 3
+  5   | Extension UI Integration      |  8–11 | [ ] TODO  | Phase 2, Phase 4
+  6   | Testing & Optimization        | 12–13 | [ ] TODO  | Phase 5
+  7   | Deployment & Submission       | 14–15 | [ ] TODO  | Phase 6
+
+All phases are SEQUENTIAL. Do not start a phase until the previous one is done.
+
+Phase dependencies:
+  - Phase 4 blocked by Phase 1 (backend) and Phase 3 (database)
+  - Phase 5 blocked by Phase 2 (extension) and Phase 4 (API contract)
+  - Phase 6 blocked by Phase 5
+  - Phase 7 blocked by Phase 6
+
+Status legend:
+  [ ] TODO       — not started
+  [~] IN PROGRESS — currently being worked on
+  [x] DONE       — complete, tests passing
+  [!] BLOCKED    — cannot proceed, see notes
+
+================================================================================
+PHASE 1: GCP Setup & Backend Scaffold
+================================================================================
+Days: 1–2 | Depends on: nothing | Blocks: Phase 4
+Status: [ ] TODO
+
+DELIVERABLE
+  FastAPI app running locally and deployed to Cloud Run with working /health,
+  stubbed /analyze, and stubbed /score endpoints. All three pass tests.
+
+TASKS
+  [ ] 1.1  Create GCP project seasussed-hackathon + enable billing
+  [ ] 1.2  Enable APIs: Cloud Run, Artifact Registry, Vertex AI, Cloud Build
+  [ ] 1.3  Create service account seasussed-sa with roles/aiplatform.user
+  [ ] 1.4  Verify Vertex AI access (gcloud ai models list --region=us-central1)
+  [ ] 1.5  Create backend/ project structure with uv
+  [ ] 1.6  Write pyproject.toml (fastapi, uvicorn, google-adk, google-genai, duckdb, pydantic)
+  [ ] 1.7  Write models.py (AnalyzeRequest, ScoreRequest, ProductInfo, ScoreBreakdown,
+           Alternative, SustainabilityScore)
+  [ ] 1.8  Write main.py with /health (real) + /analyze stub + /score stub
+  [ ] 1.9  Write Dockerfile
+  [ ] 1.10 Write tests/test_health.py
+  [ ] 1.11 Run: uv run mypy . && uv run ruff check . && uv run pytest tests/test_health.py
+  [ ] 1.12 Deploy to Cloud Run (min-instances 0 for Phase 1)
+  [ ] 1.13 Verify: curl <SERVICE_URL>/health returns {"status":"ok",...}
+
+SUCCESS CRITERIA (AUTOMATED)
+  cd /Users/jordan/sussed/backend
+  uv run mypy . 2>&1; uv run ruff check . 2>&1; uv run pytest tests/test_health.py -v 2>&1
+  → All three exit 0
+
+SUCCESS CRITERIA (MANUAL)
+  - GCP project created and billing enabled
+  - Vertex AI API enabled (gcloud ai models list --region=us-central1 returns results)
+  - Service account created with roles/aiplatform.user
+  - curl "$SERVICE_URL/health" returns {"status":"ok","service":"seasussed-backend","version":"0.1.0"}
+
+KEY FILES
+  backend/main.py
+  backend/models.py
+  backend/Dockerfile
+  backend/pyproject.toml
+  backend/tests/test_health.py
+
+NOTES
+  - Python 3.13, uv for dependency management
+  - Stub endpoints return HTTP 501 — verified in tests
+  - /analyze and /score will be fully implemented in Phase 4
+
+================================================================================
+PHASE 2: Chrome Extension Scaffold
+================================================================================
+Days: 2–3 | Depends on: nothing | Blocks: Phase 5
+Status: [ ] TODO
+
+DELIVERABLE
+  Extension loads in Chrome, opens a side panel when toolbar icon is clicked,
+  shows idle state with Analyze button, captures screenshot + DOM product titles
+  on click, logs to console. No backend call required yet.
+
+TASKS
+  [ ] 2.1  Create extension/ directory structure
+  [ ] 2.2  Write manifest.json (MV3, sidePanel permission, no default_popup)
+  [ ] 2.3  Write config.js (BACKEND_URL = "http://localhost:8000" for local dev)
+  [ ] 2.4  Write background.js (service worker: open side panel on toolbar click,
+           handle ANALYZE_PAGE message, captureVisibleTab, scrapeRelatedProducts)
+  [ ] 2.5  Write content_script.js (minimal — DOM scraping stub)
+  [ ] 2.6  Write sidepanel.html (onboarding view + idle view scaffold)
+  [ ] 2.7  Write sidepanel.js (view management, onboarding storage check, analyze button)
+  [ ] 2.8  Add placeholder icons (icons/icon16.png, icon48.png, icon128.png)
+  [ ] 2.9  Validate manifest.json is valid JSON
+  [ ] 2.10 Manual test: load unpacked, side panel opens, screenshot captured in console
+
+SUCCESS CRITERIA (MANUAL)
+  1. chrome://extensions → Load unpacked → no red errors
+  2. Click SeaSussed toolbar icon → side panel opens on right
+  3. First time: onboarding screen with privacy disclosure
+  4. Click "Got it" → idle view; reload → still idle (onboarding not shown again)
+  5. Navigate to any page → click Analyze → console logs:
+     [SeaSussed] Screenshot captured, length: <big number>
+     [SeaSussed] Related products found: [...]
+  6. Navigate to Whole Foods product page → related_products array is non-empty
+
+KEY FILES
+  extension/manifest.json
+  extension/config.js
+  extension/background.js
+  extension/content_script.js
+  extension/sidepanel.html
+  extension/sidepanel.js
+  extension/icons/icon16.png, icon48.png, icon128.png
+
+NOTES
+  - Chrome Side Panel API requires Chrome 114+ (June 2023)
+  - No default_popup — chrome.action.onClicked fires instead
+  - content_script.js does NOT render any UI on the page — scraping only
+  - Onboarding state stored in chrome.storage.local
+
+================================================================================
+PHASE 3: Sustainability Database
+================================================================================
+Days: 3–4 | Depends on: nothing | Blocks: Phase 4
+Status: [ ] TODO
+
+DELIVERABLE
+  backend/data/seafood.db SQLite database with 500+ species records, queryable
+  by common name. Contains FishBase biology, NOAA overfishing status, gear
+  impact scores, and seed alternatives.
+
+TASKS
+  [ ] 3.1  Write backend/scripts/build_database.py
+  [ ] 3.2  Implement SQLite schema (5 tables: species, common_name_aliases,
+           noaa_species, fishing_methods, alternatives)
+  [ ] 3.3  Implement ingest_fishbase() — DuckDB Parquet from fishbase.ropensci.org
+           (species + stocks + comnames)
+  [ ] 3.4  Implement ingest_noaa() — NOAA FishWatch API (~100 US species)
+  [ ] 3.5  Populate fishing_methods table (18 gear types with educational notes)
+  [ ] 3.6  Populate alternatives table (10 seed fallback entries)
+  [ ] 3.7  Write backend/database.py (get_species, get_noaa_status, get_gear_score,
+           get_seed_alternatives)
+  [ ] 3.8  Run: uv run python -m scripts.build_database
+           Verify: species > 500, aliases > 3000, noaa > 50, methods = 18
+  [ ] 3.9  Write tests/test_database.py
+  [ ] 3.10 Run: uv run mypy . && uv run ruff check . && uv run pytest tests/test_database.py
+
+SUCCESS CRITERIA (AUTOMATED)
+  cd /Users/jordan/sussed/backend
+  uv run python -m scripts.build_database
+  uv run mypy . 2>&1; uv run ruff check . 2>&1; uv run pytest tests/test_database.py -v 2>&1
+  → All pass. backend/data/seafood.db exists and is > 1 MB.
+
+SUCCESS CRITERIA (MANUAL)
+  uv run python -c "
+    import sqlite3
+    conn = sqlite3.connect('data/seafood.db')
+    print('species:', conn.execute('SELECT COUNT(*) FROM species').fetchone()[0])
+    print('aliases:', conn.execute('SELECT COUNT(*) FROM common_name_aliases').fetchone()[0])
+    print('noaa:', conn.execute('SELECT COUNT(*) FROM noaa_species').fetchone()[0])
+    print('methods:', conn.execute('SELECT COUNT(*) FROM fishing_methods').fetchone()[0])
+  "
+  Expected: species > 500, aliases > 3000, noaa > 50, methods = 18
+
+KEY FILES
+  backend/scripts/build_database.py
+  backend/database.py
+  backend/data/seafood.db   ← gitignored; built by script
+  backend/tests/test_database.py
+
+NOTES
+  - MSC CSV table REMOVED — cert detection is visual (Gemini) only
+  - stock_exploitation field added from FishBase stocks table
+  - country_management NOT a DB table — used as a text lookup dict in scoring.py
+  - data/seafood.db is gitignored for git but IS included in Docker image
+
+DATABASE SCHEMA
+  species            — FishBase biology (vulnerability, resilience, IUCN, trophic,
+                       stock_exploitation, carnivory_ratio, is_farmed_common)
+  common_name_aliases — maps common names to scientific names (many-to-many)
+  noaa_species       — NOAA FishWatch overfishing/population status (~100 US species)
+  fishing_methods    — 18 gear types with impact scores + educational notes
+  alternatives       — seed fallback alternatives for 10 common problem species
+
+GEAR TYPES (18)
+  Pole and line (98), Hook and line (95), Troll (93), Reef net (97),
+  Pot/Trap (88), Purse seine w/o FAD (78), Purse seine dolphin-safe (72),
+  Purse seine w/ FAD (55), Set net (50), Gillnet (45),
+  Longline surface (60), Longline demersal (40), Midwater trawl (35),
+  Otter trawl (20), Bottom trawl (8), Beam trawl (5), Dredge (3),
+  Unknown (30)
+
+================================================================================
+PHASE 4: Gemini Agent Pipeline
+================================================================================
+Days: 4–7 | Depends on: Phase 1, Phase 3 | Blocks: Phase 5
+Status: [ ] TODO
+
+DELIVERABLE
+  POST /analyze and POST /score fully implemented. A real Whole Foods salmon
+  screenshot returns a SustainabilityScore with grade A or B in under 5 seconds.
+
+TASKS
+  [ ] 4.1  Update models.py — add ScoreFactor model and score_factors to
+           SustainabilityScore
+  [ ] 4.2  Write backend/cert_education.py — static cert definitions dict (MSC,
+           ASC, BAP, GlobalG.A.P., FOS, ASMI, Sustainably Sourced, etc.)
+  [ ] 4.3  Write backend/agents/screen_analyzer.py — ADK LlmAgent using
+           gemini-2.5-flash (vision), output_schema=ProductInfo
+           System prompt: extract only what is VISUALLY PRESENT, return null otherwise
+  [ ] 4.4  Write backend/scoring.py — pure Python scoring math:
+           score_biological() (20 pts), score_wild_practices() (25 pts),
+           score_aquaculture() (25 pts), score_management() (30 pts),
+           score_ecological() (25 pts), compute_score() entry point
+  [ ] 4.5  Write backend/alternatives.py — identify_species_from_names() (one
+           Gemini batch call), score_alternatives() (DOM-scraped + fallback),
+           _seed_alternatives() fallback
+  [ ] 4.6  Write backend/explanation.py — generate_content() single Gemini call
+           that returns (summary, list[ScoreFactor]) — honesty rule enforced in prompt
+  [ ] 4.7  Replace main.py stubs with full /analyze and /score implementations
+  [ ] 4.8  Take screenshot fixtures manually:
+           - backend/tests/fixtures/whole_foods_sockeye.png
+           - backend/tests/fixtures/whole_foods_farmed_salmon.png
+           - backend/tests/fixtures/amazon_pasta.png
+  [ ] 4.9  Write tests/test_analyze.py (4 tests including response time test)
+  [ ] 4.10 Run: uv run mypy . && uv run ruff check . && uv run pytest tests/test_analyze.py
+  [ ] 4.11 Manual: POST /analyze with sockeye fixture → grade A or B, score > 60
+  [ ] 4.12 Manual: POST /score with corrected bluefin tuna → grade D, score < 30
+
+SUCCESS CRITERIA (AUTOMATED)
+  cd /Users/jordan/sussed/backend
+  uv run mypy . 2>&1; uv run ruff check . 2>&1; uv run pytest tests/test_analyze.py -v 2>&1
+
+SUCCESS CRITERIA (MANUAL)
+  - Whole Foods sockeye fixture → grade A or B, score > 60
+  - Bluefin tuna correction via /score → grade D, score < 30
+  - Explanation for sockeye mentions "Alaska" or "wild" (not fabricated)
+  - Explanation for product with no fishing method states method was unknown
+  - Response time < 5 seconds on local server
+
+KEY FILES
+  backend/agents/screen_analyzer.py
+  backend/scoring.py
+  backend/alternatives.py
+  backend/explanation.py
+  backend/cert_education.py
+  backend/main.py   (full implementation)
+  backend/tests/test_analyze.py
+  backend/tests/fixtures/*.png
+
+PIPELINE (POST /analyze)
+  1. ScreenAnalyzerAgent (ADK LlmAgent, gemini-2.5-flash, vision)
+     → extracts species, origin, method, certifications from screenshot
+  2. identify_alternative_species() — batch Gemini prompt maps product titles to species
+  3. compute_score() — pure Python → ScoreBreakdown + grade
+  4. score_alternatives() — scores DOM-scraped or seed alternatives
+  5. generate_content() — single Gemini call → explanation + score_factors
+  → returns SustainabilityScore
+
+SCORING MODEL (0–100)
+  Biological & Population  (max 20): vulnerability (10) + resilience (7) + IUCN (3)
+  Fishing/Aquaculture Prax (max 25): gear impact score (wild) or cert+carnivory (farmed)
+  Management & Regulation  (max 30): visual cert (15) + NOAA status (10) + FAO exploit (5)
+  Environmental/Ecological (max 25): trophic (10) + IUCN (10) + resilience bonus (5)
+
+  Grade: A (80–100) Best Choice | B (60–79) Good Alternative
+         C (40–59) Use Caution  | D (0–39)  Avoid
+
+CERT SCORES (for management + practices)
+  MSC / ASC                        = 15 pts
+  BAP                              = 10 pts
+  GlobalG.A.P. / Friend of the Sea = 8 pts
+  ASMI / Alaska Seafood            = 7 pts
+  Sustainably Sourced / Resp.Farmed = 3 pts
+  None visible                     = 0 pts
+
+GEMINI HONESTY RULE (hard rule — no exceptions)
+  ScreenAnalyzerAgent: "Extract ONLY what is VISUALLY PRESENT. Return null for
+  any field not visible or not determinable with confidence."
+  generate_content(): "Explicitly state what was and was not visible on the page.
+  Do NOT claim certainty for values Gemini returned as null."
+
+================================================================================
+PHASE 5: Extension UI Integration
+================================================================================
+Days: 8–11 | Depends on: Phase 2, Phase 4 | Blocks: Phase 6
+Status: [ ] TODO
+
+DELIVERABLE
+  Full side panel UI with all 7 views implemented. User can: open panel, analyze
+  a Whole Foods seafood page, see grade + breakdown, expand educational content,
+  correct extracted data, view alternatives, and recover from errors.
+
+TASKS
+  [ ] 5.1  Implement background.js full version (adds fetch to /analyze backend,
+           pendingTabs dedup, page title extraction, 15s timeout)
+  [ ] 5.2  Implement sidepanel.html full layout (7 views: onboarding, idle,
+           loading, result, correction, non-seafood, error)
+  [ ] 5.3  Implement sidepanel.js full controller (renderResult, showCertPopover,
+           correction submit via /score, error handler, analyze-again)
+  [ ] 5.4  Add expandable breakdown rows with per-factor educational content
+  [ ] 5.5  Add cert tag popovers (click cert tag → definition popover)
+  [ ] 5.6  Add category page escalation tip for seed-only alternatives
+  [ ] 5.7  Validate manifest.json against side panel requirements
+  [ ] 5.8  Manual test: full E2E on Whole Foods
+
+SUCCESS CRITERIA (MANUAL — 14-point checklist)
+  1.  Load extension — no errors in chrome://extensions
+  2.  Click toolbar icon → side panel opens on right
+  3.  First run → onboarding with privacy notice
+  4.  "Got it" → idle view; reload → still idle
+  5.  Navigate to Whole Foods wild sockeye salmon page
+  6.  Click Analyze → loading spinner appears
+  7.  Result appears within 8 seconds:
+      - Grade badge A or B with correct color
+      - "What we found" tags show species + origin + any certs
+      - Explanation mentions what was visible
+      - Score breakdown shows 4 rows with bar indicators
+  8.  Alternatives section shows products with correct label
+      - If seed fallback: "(check if available on this site)" shown
+  9.  "Not right?" opens correction form, pre-filled with extracted values
+      - Change species to "bluefin tuna" → grade drops to D
+  10. Navigate to non-seafood Whole Foods page → non-seafood view
+  11. Backend disconnected → error view + retry button works
+  12. "Analyze Again" button works from result view
+  13. Educational — cert popovers:
+      - MSC tag is green and tappable → popover shows "Marine Stewardship Council"
+      - Tap outside → popover closes; tap × → popover closes
+  14. Educational — expandable breakdown rows:
+      - 4 rows, each with ▶ chevron
+      - Click → expands with explanation; click again → collapses
+      - Grade A/B: no tip shown; Grade C/D: 💡 tip with actionable text
+
+KEY FILES
+  extension/background.js  (full implementation, replaces Phase 2 scaffold)
+  extension/sidepanel.html (full layout, 7 views)
+  extension/sidepanel.js   (full controller)
+
+VIEWS
+  Onboarding  — first run: privacy disclosure + "Got it" button
+  Idle        — default: SeaSussed logo + Analyze button
+  Loading     — spinner while backend processes
+  Result      — grade badge, extraction tags, explanation, breakdown, alternatives
+  Correction  — editable fields form → POST /score for re-scoring
+  Non-seafood — tip + static mockup showing what a result looks like
+  Error       — error message + Retry + Back buttons
+
+================================================================================
+PHASE 6: Testing & Optimization
+================================================================================
+Days: 12–13 | Depends on: Phase 5 | Blocks: Phase 7
+Status: [ ] TODO
+
+DELIVERABLE
+  All automated tests pass. Response time p90 < 3s. Manual checklist verified
+  on Whole Foods. Extension survives page navigation cleanly.
+
+TASKS
+  [ ] 6.1  Write tests/test_scoring.py — 9 parametrized scoring unit tests:
+           sockeye MSC (A), farmed oyster ASC (A), mackerel (A/B),
+           pollock midwater MSC (B), cod bottom trawl (C),
+           farmed salmon no cert (C), shrimp Thailand (C/D),
+           bluefin longline (D), orange roughy (D)
+  [ ] 6.2  Write tests/test_explanation.py — explanation quality tests
+           (mentions visible fields, acknowledges unknowns)
+  [ ] 6.3  Write scripts/benchmark.py — 5-request p90 timing benchmark
+  [ ] 6.4  Run full test suite: uv run pytest tests/ -v
+  [ ] 6.5  Run benchmark against local server — p90 < 3000ms
+  [ ] 6.6  Verify edge cases manually (see list below)
+  [ ] 6.7  Run Whole Foods manual checklist (10 scenarios)
+
+EDGE CASES TO VERIFY
+  - Unknown species (DB miss) → neutral score, explanation says "limited info"
+  - Atlantic salmon + wild_or_farmed=unknown → defaults to farmed (MOSTLY_FARMED)
+  - "Marine Stewardship Council" in certs list → 15 pts (full string match)
+  - "Responsibly Farmed by Whole Foods" → 3 pts (partial match)
+  - related_products=[] → seed DB fallback with honest label
+  - All 15 scraped products are non-seafood → seed fallback
+  - Panel stays open on page navigation; "Analyze Again" works
+
+WHOLE FOODS MANUAL CHECKLIST
+  [ ] Wild Alaskan sockeye salmon → grade A, score ≥ 75
+  [ ] Farmed Atlantic salmon → grade B or C
+  [ ] Non-seafood page (e.g. butter) → non-seafood view
+  [ ] Page with MSC badge → "MSC" in extraction tags
+  [ ] "Not right?" → change to bluefin tuna → grade D
+  [ ] Cancel correction → previous result restored
+  [ ] Alternatives from carousel show real product names (from_page: true)
+  [ ] Disconnect network → error view + retry works
+  [ ] Retry after reconnecting → analysis succeeds
+  [ ] Extension persists across navigations
+
+SUCCESS CRITERIA (AUTOMATED)
+  cd /Users/jordan/sussed/backend
+  uv run mypy . 2>&1; uv run ruff check . 2>&1; uv run pytest tests/ -v 2>&1
+  uv run python -m scripts.benchmark http://localhost:8000
+  → All tests pass. p90 < 3000ms.
+
+KEY FILES
+  backend/tests/test_scoring.py
+  backend/tests/test_explanation.py
+  backend/scripts/benchmark.py
+
+================================================================================
+PHASE 7: Deployment & Submission
+================================================================================
+Days: 14–15 | Depends on: Phase 6 | Blocks: nothing
+Status: [ ] TODO
+
+DELIVERABLE
+  Submitted Devpost entry with all artifacts: public GitHub repo, live Cloud Run
+  service, architecture diagram, and demo video ≤ 4 minutes.
+
+TASKS
+  [ ] 7.1  Build production seafood.db — uv run python -m scripts.build_database
+  [ ] 7.2  Deploy to Cloud Run (--min-instances 1 for demo warmth):
+           gcloud run deploy seasussed-backend --source backend/ --region us-central1
+           --allow-unauthenticated --memory 1Gi --min-instances 1 --max-instances 10
+  [ ] 7.3  Capture SERVICE_URL from deployment output
+  [ ] 7.4  Update extension/config.js with production Cloud Run URL
+  [ ] 7.5  Run production smoke test (health check + analyze with sockeye fixture)
+  [ ] 7.6  Commit final state: git add . && git commit && git push
+  [ ] 7.7  Verify GitHub repo is public
+  [ ] 7.8  Create architecture diagram (Excalidraw → PNG) → docs/architecture-diagram.png
+  [ ] 7.9  Record demo video (≤ 4 minutes, 1080p):
+           0:00–0:25  Problem statement
+           0:25–0:55  Solution overview
+           0:55–2:00  Demo: grade A (Whole Foods wild sockeye)
+           2:00–2:45  Demo: grade D product + "Not right?" flow
+           2:45–3:15  Correction form demo
+           3:15–3:40  Architecture diagram walkthrough
+           3:40–4:00  Closing
+  [ ] 7.10 Upload video (YouTube unlisted or Devpost direct)
+  [ ] 7.11 Submit Devpost entry before March 15 (one day buffer)
+
+PRE-SUBMISSION CHECKLIST
+  [ ] GitHub repo is public: gh repo view SeaSussed --json visibility
+  [ ] README has working spin-up instructions (test from scratch clone)
+  [ ] curl <SERVICE_URL>/health returns 200
+  [ ] Architecture diagram PNG in docs/
+  [ ] Demo video ≤ 4 minutes, link working
+  [ ] extension/config.js points to production Cloud Run URL in final commit
+  [ ] Cold start test: scale to 0, wait 2 min, call /health → responds within 10s
+
+DEVPOST FORM FIELDS
+  Project name:  SeaSussed
+  Tagline:       Real-time seafood sustainability scores on any grocery site
+  Category:      UI Navigator
+  Required tech: ✅ Gemini model · ✅ Google ADK · ✅ Google Cloud (Cloud Run + Vertex AI)
+  Code repo:     https://github.com/jordanlynn5/SeaSussed
+  Cloud proof:   <SERVICE_URL>/health → 200
+
+DEMO TIPS
+  - Keep --min-instances 1 active during recording (avoids cold starts)
+  - Record in incognito window (no personal data in video)
+  - Slow mouse movements on Analyze button for emphasis
+  - Show the side panel staying open as you navigate (key feature)
+
+================================================================================
+ARCHITECTURE OVERVIEW
+================================================================================
+
+Chrome Extension (Manifest V3)
+  background.js      — service worker: captureVisibleTab + POST /analyze
+  content_script.js  — injected into pages: scrapes related product titles (DOM only)
+  sidepanel.html/js  — persistent side panel: all 7 UI views
+
+            │  POST /analyze { screenshot: base64, url, related_products[] }
+            │  POST /score   { product_info: ProductInfo }   ← correction flow
+            ▼
+
+Cloud Run (Python FastAPI)  —  seasussed-backend  —  us-central1
+  POST /analyze:
+    1. ScreenAnalyzerAgent (ADK LlmAgent, gemini-2.5-flash, vision)
+       → species, origin, method, certifications from screenshot
+    2. compute_score() — pure Python scoring math
+    3. score_alternatives() — identifies + scores DOM-scraped products
+    4. generate_content() — Gemini explanation + per-factor education
+    → SustainabilityScore
+
+  POST /score:
+    1. compute_score() — pure Python (no vision)
+    2. generate_content() — Gemini explanation
+    → SustainabilityScore  (used by "Not right?" correction flow)
+
+  SQLite (embedded in Docker image):
+    species           — FishBase: 30k+ species biology
+    common_name_aliases
+    noaa_species      — NOAA FishWatch: ~100 US species overfishing status
+    fishing_methods   — 18 gear types with impact scores + educational notes
+    alternatives      — seed fallback alternatives
+
+            │  JSON: { score, grade, breakdown, alternatives, explanation, score_factors,
+            │          product_info }
+            ▼
+
+Side Panel UI — grade badge + color, score, expandable breakdown, alternatives,
+               "Not right?" correction form, cert definition popovers
+
+================================================================================
+API CONTRACT
+================================================================================
+
+GET  /health
+     → {"status": "ok", "service": "seasussed-backend", "version": "0.1.0"}
+
+POST /analyze
+     Request:  { screenshot: string (base64 PNG), url: string,
+                 page_title?: string, related_products?: string[] }
+     Response: SustainabilityScore (see below)
+     Notes:    full pipeline — vision + scoring + explanation + alternatives
+
+POST /score
+     Request:  { product_info: ProductInfo }
+     Response: SustainabilityScore
+     Notes:    no vision step; used by "Not right?" correction flow
+
+SustainabilityScore response shape:
+  {
+    score: int (0–100),
+    grade: "A"|"B"|"C"|"D",
+    breakdown: { biological: float, practices: float, management: float, ecological: float },
+    alternatives: [{ species, score, grade, reason, from_page }],  // 1–3 items
+    alternatives_label: string,  // "Similar great choices" or "Better alternatives"
+    explanation: string,          // 2–3 sentences, states what was visible
+    score_factors: [{ category, score, max_score, explanation, tip }],  // 4 items
+    product_info: {
+      is_seafood: bool,
+      species: string|null,
+      wild_or_farmed: "wild"|"farmed"|"unknown",
+      fishing_method: string|null,
+      origin_region: string|null,
+      certifications: string[]
+    }
+  }
+
+================================================================================
+KEY COMMANDS REFERENCE
+================================================================================
+
+# Backend
+uv sync                                    # install deps
+uv run python -m scripts.build_database    # build seafood.db (one-time)
+uv run uvicorn main:app --reload           # local dev (port 8000)
+uv run pytest                             # run all tests
+uv run ruff check --fix .                 # auto-fix lint
+uv run mypy .                             # type check
+
+# Full verification (run before every commit, SEQUENTIAL):
+cd /Users/jordan/sussed/backend && uv run mypy . 2>&1; uv run ruff check . 2>&1; uv run pytest 2>&1
+
+# Chrome Extension
+# chrome://extensions → Enable Dev Mode → Load unpacked → select extension/
+# Set BACKEND_URL in extension/config.js
+
+# Cloud Run Deploy
+gcloud run deploy seasussed-backend \
+  --source backend/ --region us-central1 \
+  --allow-unauthenticated --memory 1Gi \
+  --min-instances 1 \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=seasussed-hackathon,GOOGLE_CLOUD_REGION=us-central1
+
+# Local env vars for Vertex AI:
+export GOOGLE_CLOUD_PROJECT=seasussed-hackathon
+export GOOGLE_CLOUD_REGION=us-central1
+# Auth: gcloud auth application-default login
+
+================================================================================
+TECH STACK
+================================================================================
+Backend:    Python 3.13, FastAPI, Google ADK v1.17, Gemini 2.5 Flash (Vertex AI)
+            google-genai (direct API for explanation + alternatives), DuckDB, SQLite
+Extension:  Chrome Manifest V3, Vanilla JS (no build step)
+Data:       FishBase (Parquet via DuckDB), NOAA FishWatch (JSON API)
+Infra:      Google Cloud Run (us-central1), Vertex AI, Artifact Registry
+
+================================================================================
+HACKATHON SUBMISSION REQUIREMENTS
+================================================================================
+[ ] Public GitHub repo with spin-up instructions
+[ ] Google Cloud deployment (Cloud Run) — proof via service URL
+[ ] Architecture diagram (docs/architecture-diagram.png)
+[ ] Demo video ≤ 4 minutes showcasing real-time multimodal features
+[ ] Devpost submission by March 15, 2026 (one day buffer before March 16 deadline)
+
+================================================================================
+END OF PROGRESS DOCUMENT
+Last updated: 2026-03-02
+================================================================================
