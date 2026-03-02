@@ -173,8 +173,8 @@ If user dismisses the primary alternatives panel: show prompt "Want more options
 |---|---|---|
 | 1 | GCP Setup & Backend Scaffold | ✅ complete |
 | 2 | Chrome Extension Scaffold | ✅ complete |
-| 3 | Sustainability Database | pending |
-| 4 | Gemini Agent Pipeline | pending |
+| 3 | Sustainability Database | ✅ complete |
+| 4 | Gemini Agent Pipeline | ✅ complete |
 | 5 | Extension UI Integration | pending |
 | 6 | Testing & Optimization | pending |
 | 7 | Deployment & Submission | pending |

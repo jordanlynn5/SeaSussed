@@ -49,6 +49,8 @@ Set these before running the backend locally (required for Vertex AI auth):
 ```bash
 export GOOGLE_CLOUD_PROJECT=seasussed-489008
 export GOOGLE_CLOUD_REGION=us-central1
+export GOOGLE_CLOUD_LOCATION=us-central1   # ADK uses this name (not REGION)
+export GOOGLE_GENAI_USE_VERTEXAI=1         # Required: tells ADK to use Vertex AI, not API key
 # Auth: gcloud auth application-default login
 ```
 
