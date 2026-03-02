@@ -52,6 +52,23 @@ export GOOGLE_CLOUD_REGION=us-central1
 # Auth: gcloud auth application-default login
 ```
 
+## TDD Workflow
+
+**Tests are written before implementation.** No code is committed without passing tests.
+
+Rules:
+1. Write the test first — it must fail before writing the implementation
+2. Write the minimum implementation to make the test pass
+3. Run the full suite (`mypy` + `ruff` + `pytest`) before every commit — enforced by pre-commit hook
+4. Never commit with failing tests or type errors
+5. If a bug is found, write a test that reproduces it before fixing it
+
+The pre-commit hook at `.githooks/pre-commit` runs all three checks automatically.
+New contributors must run once to activate it:
+```bash
+git config core.hooksPath .githooks
+```
+
 ## RPI Workflow
 
 All significant changes follow four phases, each in its own conversation:
@@ -158,7 +175,7 @@ If `is_seafood` is false, the full response still uses this shape with `score: 0
 
 ### Git
 - `git pull --rebase` before every push
-- Run mypy + ruff BEFORE committing
+- Pre-commit hook runs mypy + ruff + pytest automatically — never bypass with `--no-verify`
 - Worktree cleanup: `git worktree remove --force <path>; git branch -D <branch>`
 - **NEVER commit secrets** — API keys, service account JSON, private keys, tokens, passwords must never appear in committed files. Use environment variables or ADC instead.
 - Before staging files, scan for secrets: reject any file matching `*.key`, `*.pem`, `*.p12`, `service-account*.json`, `credentials*.json`, `gcp-key*.json`, or any hardcoded key/token string.
@@ -177,7 +194,14 @@ If `is_seafood` is false, the full response still uses this shape with `score: 0
 
 ## Git Workflow
 
-Single `main` branch for this hackathon project. No develop/production split needed.
+Two branches:
+- `main` — stable, deployable. Only merge from `dev` via PR when a phase is complete and verified.
+- `dev` — active development. All day-to-day work happens here.
+
+Typical flow:
+1. Work on `dev` with conventional commits
+2. When a phase is complete and passing (`mypy` + `ruff` + `pytest`), open a PR `dev → main`
+3. Merge PR, then `git pull --rebase` on both branches
 
 Use conventional commits:
 ```
