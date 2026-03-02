@@ -160,6 +160,9 @@ If `is_seafood` is false, the full response still uses this shape with `score: 0
 - `git pull --rebase` before every push
 - Run mypy + ruff BEFORE committing
 - Worktree cleanup: `git worktree remove --force <path>; git branch -D <branch>`
+- **NEVER commit secrets** — API keys, service account JSON, private keys, tokens, passwords must never appear in committed files. Use environment variables or ADC instead.
+- Before staging files, scan for secrets: reject any file matching `*.key`, `*.pem`, `*.p12`, `service-account*.json`, `credentials*.json`, `gcp-key*.json`, or any hardcoded key/token string.
+- If a secret is accidentally staged, stop immediately and tell the user to rotate the credential before pushing.
 
 ### Python-Specific
 - Always use `uv run python` — never bare `python3`

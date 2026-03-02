@@ -33,3 +33,15 @@ node_modules/
 
 # Google Cloud
 .gcloudignore
+
+# Secrets — NEVER commit these
+*.key
+*.pem
+*.p12
+*.json.secret
+service-account*.json
+credentials*.json
+secrets/
+.secrets/
+gcp-key*.json
+application_default_credentials.json
