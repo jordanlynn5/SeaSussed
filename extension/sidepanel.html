@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SeaSussed</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      color: #1f2937;
+      background: #f9fafb;
+      min-height: 100vh;
+    }
+    .view { display: none; padding: 20px; }
+    .view.active { display: block; }
+
+    /* Onboarding */
+    .onboarding-icon { font-size: 48px; text-align: center; margin-bottom: 16px; }
+    .onboarding h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    .onboarding p { color: #6b7280; line-height: 1.5; margin-bottom: 12px; }
+    .onboarding .notice {
+      background: #eff6ff; border: 1px solid #bfdbfe;
+      border-radius: 8px; padding: 12px; font-size: 13px; color: #1d4ed8;
+      margin-bottom: 20px;
+    }
+    .btn-primary {
+      width: 100%; padding: 12px; background: #0d6efd; color: white;
+      border: none; border-radius: 8px; font-size: 15px; font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-primary:hover { background: #0b5ed7; }
+
+    /* Idle */
+    .idle { text-align: center; padding: 40px 20px; }
+    .idle h2 { font-size: 16px; margin-bottom: 8px; }
+    .idle p { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+
+  <!-- Onboarding view (first run only) -->
+  <div class="view onboarding" id="view-onboarding">
+    <div class="onboarding-icon">🐟</div>
+    <h1>Welcome to SeaSussed</h1>
+    <p>Get instant sustainability scores for seafood while you shop online.</p>
+    <div class="notice">
+      📷 When you click Analyze, a screenshot of the current page is sent to
+      SeaSussed's servers to identify the seafood product. Screenshots are not stored.
+    </div>
+    <p>Works on any grocery website — Whole Foods, Amazon Fresh, Instacart, and more.</p>
+    <br>
+    <button class="btn-primary" id="onboarding-ok">Got it — Let's go</button>
+  </div>
+
+  <!-- Idle view (default after onboarding) -->
+  <div class="view idle" id="view-idle">
+    <div style="font-size:36px; margin-bottom:12px;">🐠</div>
+    <h2>SeaSussed</h2>
+    <p>Navigate to a seafood product page<br>and click Analyze.</p>
+    <button class="btn-primary" id="analyze-btn">Analyze This Page</button>
+  </div>
+
+  <!-- Other views: loading, result, correction, non-seafood, error -->
+  <!-- Phase 5 will implement these views fully -->
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
