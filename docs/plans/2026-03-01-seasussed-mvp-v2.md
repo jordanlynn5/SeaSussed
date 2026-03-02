@@ -171,7 +171,7 @@ If user dismisses the primary alternatives panel: show prompt "Want more options
 
 | Phase | Name | Status |
 |---|---|---|
-| 1 | GCP Setup & Backend Scaffold | pending |
+| 1 | GCP Setup & Backend Scaffold | ✅ complete |
 | 2 | Chrome Extension Scaffold | pending |
 | 3 | Sustainability Database | pending |
 | 4 | Gemini Agent Pipeline | pending |
