@@ -28,7 +28,7 @@ PHASE OVERVIEW
 
 Phase | Name                          | Days  | Status    | Depends On
 ------+-------------------------------+-------+-----------+-----------------
-  1   | GCP Setup & Backend Scaffold  |  1–2  | [ ] TODO  | —
+  1   | GCP Setup & Backend Scaffold  |  1–2  | [x] DONE  | —
   2   | Chrome Extension Scaffold     |  2–3  | [ ] TODO  | —
   3   | Sustainability Database       |  3–4  | [ ] TODO  | —
   4   | Gemini Agent Pipeline         |  4–7  | [ ] TODO  | Phase 1, Phase 3
@@ -61,20 +61,20 @@ DELIVERABLE
   stubbed /analyze, and stubbed /score endpoints. All three pass tests.
 
 TASKS
-  [ ] 1.1  Create GCP project seasussed-hackathon + enable billing
-  [ ] 1.2  Enable APIs: Cloud Run, Artifact Registry, Vertex AI, Cloud Build
-  [ ] 1.3  Create service account seasussed-sa with roles/aiplatform.user
-  [ ] 1.4  Verify Vertex AI access (gcloud ai models list --region=us-central1)
-  [ ] 1.5  Create backend/ project structure with uv
-  [ ] 1.6  Write pyproject.toml (fastapi, uvicorn, google-adk, google-genai, duckdb, pydantic)
-  [ ] 1.7  Write models.py (AnalyzeRequest, ScoreRequest, ProductInfo, ScoreBreakdown,
-           Alternative, SustainabilityScore)
-  [ ] 1.8  Write main.py with /health (real) + /analyze stub + /score stub
-  [ ] 1.9  Write Dockerfile
-  [ ] 1.10 Write tests/test_health.py
-  [ ] 1.11 Run: uv run mypy . && uv run ruff check . && uv run pytest tests/test_health.py
-  [ ] 1.12 Deploy to Cloud Run (min-instances 0 for Phase 1)
-  [ ] 1.13 Verify: curl <SERVICE_URL>/health returns {"status":"ok",...}
+  [x] 1.1  GCP project seasussed-489008 created + billing enabled
+  [x] 1.2  APIs enabled: Cloud Run, Artifact Registry, Vertex AI, Cloud Build
+  [x] 1.3  Service account seasussed-sa@seasussed-489008.iam.gserviceaccount.com created
+  [x] 1.4  Vertex AI API verified accessible
+  [x] 1.5  Create backend/ project structure with uv
+  [x] 1.6  Write pyproject.toml (fastapi, uvicorn, google-adk, google-genai, duckdb, pydantic)
+  [x] 1.7  Write models.py (AnalyzeRequest, ScoreRequest, ProductInfo, ScoreBreakdown,
+           ScoreFactor, Alternative, SustainabilityScore)
+  [x] 1.8  Write main.py with /health (real) + /analyze stub + /score stub
+  [x] 1.9  Write Dockerfile
+  [x] 1.10 Write tests/test_health.py
+  [x] 1.11 mypy: 0 errors | ruff: 0 warnings | pytest: 3/3 passed
+  [x] 1.12 Deployed to Cloud Run: https://seasussed-backend-370810047010.us-central1.run.app
+  [x] 1.13 curl /health → {"status":"ok","service":"seasussed-backend","version":"0.1.0"}
 
 SUCCESS CRITERIA (AUTOMATED)
   cd /Users/jordan/sussed/backend

@@ -28,14 +28,14 @@ uv run mypy .                        # Type check
 # Run ALL verification sequentially before every commit (NEVER in parallel):
 cd /Users/jordan/sussed/backend && uv run mypy . 2>&1; uv run ruff check . 2>&1; uv run pytest 2>&1
 
-# Cloud Run deployment (GCP project: seasussed-hackathon)
+# Cloud Run deployment (GCP project: seasussed-489008)
 gcloud run deploy seasussed-backend \
   --source backend/ \
   --region us-central1 \
   --allow-unauthenticated \
   --memory 1Gi \
   --min-instances 1 \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=seasussed-hackathon,GOOGLE_CLOUD_REGION=us-central1
+  --set-env-vars GOOGLE_CLOUD_PROJECT=seasussed-489008,GOOGLE_CLOUD_REGION=us-central1
 
 # Chrome Extension
 # Load unpacked: chrome://extensions → Load unpacked → select extension/
@@ -47,7 +47,7 @@ gcloud run deploy seasussed-backend \
 Set these before running the backend locally (required for Vertex AI auth):
 
 ```bash
-export GOOGLE_CLOUD_PROJECT=seasussed-hackathon
+export GOOGLE_CLOUD_PROJECT=seasussed-489008
 export GOOGLE_CLOUD_REGION=us-central1
 # Auth: gcloud auth application-default login
 ```
