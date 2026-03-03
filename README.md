@@ -8,7 +8,7 @@
 
 A Chrome extension that uses Gemini 2.5 Flash to analyze any grocery website and give you an instant sustainability score for seafood — right at the point of purchase.
 
-![Chapa Badge](https://chapa.thecreativetoken.com/u/jordan294/badge.svg)
+![Chapa Badge](https://chapa.thecreativetoken.com/u/jordanlynn5/badge.svg)
 
 ---
 

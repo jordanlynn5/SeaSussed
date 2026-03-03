@@ -6,7 +6,7 @@ chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
 });
 
-// Listen for analyze request from side panel
+// Listen for messages from side panel
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'ANALYZE_PAGE') {
     handleAnalyze(msg.tabId, msg.url)
@@ -14,12 +14,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => sendResponse({ error: err.message }));
     return true; // keep channel open for async response
   }
+  if (msg.type === 'CAPTURE_SCREENSHOT_FOR_VOICE') {
+    captureScreenshotForVoice(msg.tabId, msg.url, msg.pageTitle)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true; // async
+  }
 });
 
-async function handleAnalyze(tabId, url) {
-  // 1. Capture screenshot
-  const dataUrl = await new Promise((resolve, reject) => {
-    chrome.tabs.captureVisibleTab(null, { format: 'png' }, (result) => {
+async function captureVisibleTab(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  return new Promise((resolve, reject) => {
+    chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }, (result) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
       } else {
@@ -27,6 +33,29 @@ async function handleAnalyze(tabId, url) {
       }
     });
   });
+}
+
+async function captureScreenshotForVoice(tabId, url, pageTitle) {
+  const dataUrl = await captureVisibleTab(tabId);
+  const base64 = dataUrl.split(',')[1];
+
+  const domData = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: scrapeRelatedProducts,
+  });
+  const relatedProducts = domData[0]?.result ?? [];
+
+  return {
+    screenshot: base64,
+    url,
+    page_title: pageTitle,
+    related_products: relatedProducts,
+  };
+}
+
+async function handleAnalyze(tabId, url) {
+  // 1. Capture screenshot
+  const dataUrl = await captureVisibleTab(tabId);
   const base64 = dataUrl.split(',')[1];
 
   // 2. Scrape related product titles from the page DOM
