@@ -306,7 +306,7 @@ DEFINE resetVoiceView():
 Manual testing only (browser UI).
 
 ### Manual
-- [ ] Idle view shows both "Analyze This Page" and "Start Voice Mode" buttons
+- [x] Idle view shows both "Analyze This Page" and "Start Voice Mode" buttons
 - [ ] Click "Start Voice Mode" → mic permission prompt → grant → side panel switches to voice view
 - [ ] Voice view shows blue pulsing mic indicator and "Listening..." status
 - [ ] Speak "what about this salmon?" on a Whole Foods product page:

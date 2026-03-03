@@ -35,6 +35,86 @@
     .idle { text-align: center; padding: 40px 20px; }
     .idle h2 { font-size: 16px; margin-bottom: 8px; }
     .idle p { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+
+    /* ── Voice Mode ── */
+    .voice-mode { padding: 16px; flex-direction: column; gap: 12px; }
+    .view.voice-mode.active { display: flex; }
+
+    /* Mic indicator — pulsing rings */
+    .voice-indicator {
+      width: 64px; height: 64px; border-radius: 50%;
+      background: #1a73e8; margin: 0 auto;
+      position: relative; display: flex; align-items: center; justify-content: center;
+    }
+    .voice-indicator::before, .voice-indicator::after {
+      content: ''; position: absolute;
+      border-radius: 50%; border: 2px solid #1a73e8;
+      animation: pulse 1.5s ease-out infinite;
+    }
+    .voice-indicator::before { width: 80px; height: 80px; }
+    .voice-indicator::after  { width: 96px; height: 96px; animation-delay: 0.3s; }
+    @keyframes pulse {
+      0%   { transform: scale(1); opacity: 0.7; }
+      100% { transform: scale(1.2); opacity: 0; }
+    }
+    .voice-indicator.speaking { background: #34a853; }
+    .voice-indicator.speaking::before,
+    .voice-indicator.speaking::after { border-color: #34a853; }
+    .voice-indicator.thinking { background: #fbbc04; animation: none; }
+
+    /* Status label */
+    .voice-status { text-align: center; font-size: 13px; color: #6b7280; }
+
+    /* Voice result card — compact version of the full score */
+    .voice-result-card {
+      background: white; border-radius: 10px;
+      border: 1px solid #e5e7eb; padding: 12px;
+    }
+    .voice-result-card .grade-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 20px; font-weight: 700;
+    }
+    .voice-result-card .grade-A { color: #166534; }
+    .voice-result-card .grade-B { color: #854d0e; }
+    .voice-result-card .grade-C { color: #92400e; }
+    .voice-result-card .grade-D { color: #991b1b; }
+    .voice-result-card .species-name { font-size: 13px; color: #374151; margin-top: 4px; }
+    .voice-result-card .score-bar-wrap { margin-top: 8px; }
+    .voice-result-card .score-bar {
+      height: 6px; border-radius: 3px; background: #e5e7eb;
+    }
+    .voice-result-card .score-bar-fill { height: 100%; border-radius: 3px; }
+    .voice-result-card .alt-chip {
+      display: inline-block; font-size: 11px; padding: 2px 8px;
+      border-radius: 12px; background: #eff6ff; color: #1d4ed8;
+      margin-top: 6px; margin-right: 4px;
+    }
+
+    /* Secondary outline button (e.g. Start Voice Mode) */
+    .btn-secondary {
+      width: 100%; padding: 10px; margin-top: 8px; background: transparent;
+      border: 1px solid #1a73e8; border-radius: 8px; color: #1a73e8;
+      font-size: 14px; font-weight: 500; cursor: pointer;
+    }
+    .btn-secondary:hover { background: #eff6ff; }
+
+    /* Stop button */
+    .btn-stop {
+      width: 100%; padding: 10px; background: transparent;
+      border: 1px solid #d1d5db; border-radius: 8px;
+      color: #6b7280; font-size: 13px; cursor: pointer;
+    }
+    .btn-stop:hover { background: #f9fafb; }
+
+    /* Inline text-link button (e.g. Restart after session end) */
+    .btn-text-link {
+      color: #1a73e8; background: none; border: none;
+      cursor: pointer; font-size: 13px;
+    }
+    .btn-text-link:hover { text-decoration: underline; }
+
+    /* Alt-label in voice score card */
+    .alt-label { font-size: 11px; color: #6b7280; margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -59,10 +139,37 @@
     <h2>SeaSussed</h2>
     <p>Navigate to a seafood product page<br>and click Analyze.</p>
     <button class="btn-primary" id="analyze-btn">Analyze This Page</button>
+    <button class="btn-secondary" id="start-voice-btn">🎤 Start Voice Mode</button>
   </div>
 
   <!-- Other views: loading, result, correction, non-seafood, error -->
   <!-- Phase 5 will implement these views fully -->
+
+  <!-- Voice mode view -->
+  <div class="view voice-mode" id="view-voice">
+
+    <!-- Mic indicator -->
+    <div class="voice-indicator" id="voice-indicator">
+      🎤
+    </div>
+    <div class="voice-status" id="voice-status">Connecting...</div>
+
+    <!-- Score card (hidden until first result) -->
+    <div class="voice-result-card" id="voice-result-card" style="display:none">
+      <div class="grade-badge" id="vc-grade-badge">—</div>
+      <div class="species-name" id="vc-species">—</div>
+      <div class="score-bar-wrap">
+        <div class="score-bar">
+          <div class="score-bar-fill" id="vc-score-fill" style="width:0%"></div>
+        </div>
+      </div>
+      <div id="vc-alternatives"></div>
+    </div>
+
+    <!-- Stop button -->
+    <button class="btn-stop" id="stop-voice-btn">End voice session</button>
+
+  </div>
 
   <script src="config.js"></script>
   <script src="voice-client.js"></script>
