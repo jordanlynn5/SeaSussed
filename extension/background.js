@@ -1,24 +1,40 @@
 // extension/background.js
 importScripts('config.js');
 
+const pendingTabs = new Set();
+
 // Toolbar icon click → open side panel
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
 });
 
-// Listen for messages from side panel
+// Messages from sidepanel.js and voice-client.js
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'ANALYZE_PAGE') {
-    handleAnalyze(msg.tabId, msg.url)
-      .then(sendResponse)
-      .catch(err => sendResponse({ error: err.message }));
-    return true; // keep channel open for async response
+    const tabId = msg.tabId;
+    if (pendingTabs.has(tabId)) {
+      sendResponse({ error: 'Analysis already in progress' });
+      return true;
+    }
+
+    pendingTabs.add(tabId);
+    handleAnalyze(tabId, msg.url)
+      .then(result => {
+        pendingTabs.delete(tabId);
+        sendResponse(result);
+      })
+      .catch(err => {
+        pendingTabs.delete(tabId);
+        sendResponse({ error: err.message });
+      });
+    return true;
   }
+
   if (msg.type === 'CAPTURE_SCREENSHOT_FOR_VOICE') {
     captureScreenshotForVoice(msg.tabId, msg.url, msg.pageTitle)
       .then(sendResponse)
       .catch(err => sendResponse({ error: err.message }));
-    return true; // async
+    return true;
   }
 });
 
@@ -39,11 +55,14 @@ async function captureScreenshotForVoice(tabId, url, pageTitle) {
   const dataUrl = await captureVisibleTab(tabId);
   const base64 = dataUrl.split(',')[1];
 
-  const domData = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: scrapeRelatedProducts,
-  });
-  const relatedProducts = domData[0]?.result ?? [];
+  let relatedProducts = [];
+  try {
+    const domData = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: scrapeRelatedProducts,
+    });
+    relatedProducts = domData[0]?.result ?? [];
+  } catch (_) {}
 
   return {
     screenshot: base64,
@@ -58,44 +77,71 @@ async function handleAnalyze(tabId, url) {
   const dataUrl = await captureVisibleTab(tabId);
   const base64 = dataUrl.split(',')[1];
 
-  // 2. Scrape related product titles from the page DOM
-  const domData = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: scrapeRelatedProducts,
+  // 2. Scrape related product titles from page DOM
+  let relatedProducts = [];
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: scrapeRelatedProducts,
+    });
+    relatedProducts = results[0]?.result ?? [];
+  } catch (_) {
+    // DOM scraping is best-effort; don't fail the main analysis
+  }
+
+  // 3. Get page title for context
+  let pageTitle = '';
+  try {
+    const titleResults = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => document.title,
+    });
+    pageTitle = titleResults[0]?.result ?? '';
+  } catch (_) {}
+
+  // 4. Call backend
+  const response = await fetch(`${BACKEND_URL}/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      screenshot: base64,
+      url: url,
+      page_title: pageTitle,
+      related_products: relatedProducts,
+    }),
+    signal: AbortSignal.timeout(45000),
   });
-  const relatedProducts = domData[0]?.result ?? [];
 
-  // Phase 4 will add the backend call here
-  // For now: log and return mock data for scaffolding
-  console.log('[SeaSussed] Screenshot captured, length:', base64.length);
-  console.log('[SeaSussed] Related products found:', relatedProducts);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Backend error ${response.status}: ${text.substring(0, 120)}`);
+  }
 
-  return { _scaffold: true, screenshot_length: base64.length, related_products: relatedProducts };
+  return await response.json();
 }
 
 // Injected function — runs in page context
 function scrapeRelatedProducts() {
-  const titleSelectors = [
-    '[data-testid*="product"] h2',
-    '[data-testid*="product"] h3',
-    '.product-title',
-    '.product-name',
-    '[class*="ProductName"]',
-    '[class*="product-title"]',
-    '[class*="product-name"]',
-    '[aria-label*="product"] h2',
-    '[aria-label*="product"] h3',
+  const selectors = [
+    '[data-testid*="product"] h2', '[data-testid*="product"] h3',
+    '.product-title', '.product-name',
+    '[class*="ProductName"]', '[class*="product-title"]', '[class*="product-name"]',
+    '[class*="ProductTitle"]',
+    '[aria-label*="product"] h2', '[aria-label*="product"] h3',
+    // Whole Foods specific
+    '[data-ref*="product-name"]',
+    '.w-pie--product-tile__content h2',
   ];
 
   const titles = new Set();
-  for (const selector of titleSelectors) {
-    document.querySelectorAll(selector).forEach(el => {
-      const text = el.innerText?.trim();
-      if (text && text.length > 3 && text.length < 150) {
-        titles.add(text);
-      }
-    });
+  for (const sel of selectors) {
+    try {
+      document.querySelectorAll(sel).forEach(el => {
+        const text = el.innerText?.trim();
+        if (text && text.length > 3 && text.length < 150) titles.add(text);
+      });
+    } catch (_) {}
   }
 
-  return [...titles].slice(0, 15); // max 15 candidates
+  return [...titles].slice(0, 15);
 }

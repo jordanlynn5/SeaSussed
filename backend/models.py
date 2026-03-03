@@ -21,6 +21,7 @@ class ProductInfo(BaseModel):
     fishing_method: str | None
     origin_region: str | None
     certifications: list[str]  # ["MSC", "ASC", "BAP", "ASMI", ...]
+    product_name: str | None = None
 
 
 class ScoreBreakdown(BaseModel):
@@ -46,6 +47,21 @@ class Alternative(BaseModel):
     from_page: bool  # True = scraped from page DOM; False = seed DB
 
 
+class PageAnalysis(BaseModel):
+    page_type: Literal["single_product", "product_listing", "no_seafood"]
+    products: list[ProductInfo]
+
+
+class PageProduct(BaseModel):
+    product_name: str
+    species: str | None
+    wild_or_farmed: Literal["wild", "farmed", "unknown"]
+    certifications: list[str]
+    score: int
+    grade: Literal["A", "B", "C", "D"]
+    breakdown: ScoreBreakdown
+
+
 class SustainabilityScore(BaseModel):
     score: int
     grade: Literal["A", "B", "C", "D"]
@@ -55,3 +71,9 @@ class SustainabilityScore(BaseModel):
     explanation: str  # 2–3 sentences mentioning visible vs unknown fields
     score_factors: list[ScoreFactor]  # per-category educational content
     product_info: ProductInfo
+
+
+class AnalyzeResponse(BaseModel):
+    page_type: Literal["single_product", "product_listing", "no_seafood"]
+    result: SustainabilityScore | None = None  # single_product or no_seafood
+    products: list[PageProduct] = []  # product_listing

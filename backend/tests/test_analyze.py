@@ -58,13 +58,16 @@ def test_seafood_product_returns_valid_score() -> None:
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["product_info"]["is_seafood"] is True
-    assert data["grade"] in ("A", "B", "C", "D")
-    assert 0 <= data["score"] <= 100
-    assert len(data["explanation"]) > 20
-    assert data["breakdown"]["biological"] >= 0
-    assert data["breakdown"]["management"] >= 0
-    assert len(data["score_factors"]) == 4
+    assert data["page_type"] in ("single_product", "product_listing")
+    if data["page_type"] == "single_product":
+        result = data["result"]
+        assert result["product_info"]["is_seafood"] is True
+        assert result["grade"] in ("A", "B", "C", "D")
+        assert 0 <= result["score"] <= 100
+        assert len(result["explanation"]) > 20
+        assert result["breakdown"]["biological"] >= 0
+        assert result["breakdown"]["management"] >= 0
+        assert len(result["score_factors"]) == 4
 
 
 @pytest.mark.skipif(
@@ -83,7 +86,8 @@ def test_non_seafood_returns_is_seafood_false() -> None:
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["product_info"]["is_seafood"] is False
+    assert data["page_type"] == "no_seafood"
+    assert data["result"]["product_info"]["is_seafood"] is False
 
 
 @pytest.mark.skipif(

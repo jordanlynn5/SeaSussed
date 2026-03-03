@@ -11,6 +11,7 @@ from google.genai import types
 from main import app
 from models import (
     Alternative,
+    PageAnalysis,
     ProductInfo,
     ScoreBreakdown,
     ScoreFactor,
@@ -128,7 +129,7 @@ def test_voice_websocket_connects_and_stops(mock_get_client: MagicMock) -> None:
 # ── Test 2: Tool call → screenshot → score_result ────────────────────────
 
 
-@patch("voice_session.run_scoring_pipeline", return_value=MOCK_SCORE)
+@patch("voice_session.run_scoring_pipeline", new_callable=AsyncMock, return_value=MOCK_SCORE)
 @patch("voice_session.analyze_screenshot", new_callable=AsyncMock)
 @patch("voice_session.get_genai_client")
 def test_voice_analyze_tool_call(
@@ -136,7 +137,9 @@ def test_voice_analyze_tool_call(
     mock_analyze: AsyncMock,
     mock_pipeline: MagicMock,
 ) -> None:
-    mock_analyze.return_value = MOCK_PRODUCT_INFO
+    mock_analyze.return_value = PageAnalysis(
+        page_type="single_product", products=[MOCK_PRODUCT_INFO]
+    )
 
     session = MockSession(responses=[_make_tool_call_response()])
     mock_get_client.return_value = _mock_genai_client(session)

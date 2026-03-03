@@ -10,6 +10,7 @@ from google.genai import types
 
 from agents.screen_analyzer import analyze_screenshot
 from gemini_client import get_genai_client
+from models import ProductInfo
 from pipeline import run_scoring_pipeline
 
 log = logging.getLogger(__name__)
@@ -185,10 +186,21 @@ class VoiceSession:
         if msg is None:
             return {"error": "No screenshot received", "not_seafood": True}
 
-        product_info = await analyze_screenshot(
+        page_analysis = await analyze_screenshot(
             msg["data"], msg.get("url", ""), msg.get("page_title", "")
         )
-        score_result = run_scoring_pipeline(
+        if page_analysis.products:
+            product_info = page_analysis.products[0]
+        else:
+            product_info = ProductInfo(
+                is_seafood=False,
+                species=None,
+                wild_or_farmed="unknown",
+                fishing_method=None,
+                origin_region=None,
+                certifications=[],
+            )
+        score_result = await run_scoring_pipeline(
             product_info, msg.get("related_products", [])
         )
 

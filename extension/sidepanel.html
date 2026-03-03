@@ -7,40 +7,247 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 14px;
-      color: #1f2937;
-      background: #f9fafb;
-      min-height: 100vh;
+      font-size: 14px; color: #1f2937; background: #f9fafb; min-height: 100vh;
     }
     .view { display: none; padding: 20px; }
     .view.active { display: block; }
 
-    /* Onboarding */
-    .onboarding-icon { font-size: 48px; text-align: center; margin-bottom: 16px; }
-    .onboarding h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
-    .onboarding p { color: #6b7280; line-height: 1.5; margin-bottom: 12px; }
-    .onboarding .notice {
-      background: #eff6ff; border: 1px solid #bfdbfe;
-      border-radius: 8px; padding: 12px; font-size: 13px; color: #1d4ed8;
-      margin-bottom: 20px;
-    }
+    /* ---- Shared ---- */
     .btn-primary {
       width: 100%; padding: 12px; background: #0d6efd; color: white;
       border: none; border-radius: 8px; font-size: 15px; font-weight: 600;
-      cursor: pointer;
+      cursor: pointer; margin-top: 4px;
     }
     .btn-primary:hover { background: #0b5ed7; }
+    .btn-secondary {
+      width: 100%; padding: 10px; background: white; color: #374151;
+      border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px;
+      cursor: pointer; margin-top: 8px;
+    }
+    .btn-secondary:hover { background: #f3f4f6; }
+    .section-title {
+      font-size: 11px; font-weight: 600; color: #9ca3af;
+      text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+    }
 
-    /* Idle */
-    .idle { text-align: center; padding: 40px 20px; }
-    .idle h2 { font-size: 16px; margin-bottom: 8px; }
-    .idle p { color: #6b7280; font-size: 13px; margin-bottom: 24px; }
+    /* ---- Onboarding ---- */
+    .onboarding-icon { font-size: 48px; text-align: center; margin-bottom: 16px; }
+    #view-onboarding h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    #view-onboarding p { color: #6b7280; line-height: 1.5; margin-bottom: 12px; }
+    .notice {
+      background: #eff6ff; border: 1px solid #bfdbfe;
+      border-radius: 8px; padding: 12px; font-size: 13px; color: #1d4ed8;
+      margin-bottom: 20px; line-height: 1.5;
+    }
 
-    /* ── Voice Mode ── */
-    .voice-mode { padding: 16px; flex-direction: column; gap: 12px; }
+    /* ---- Idle ---- */
+    #view-idle { text-align: center; padding: 40px 20px; }
+    #view-idle .icon { font-size: 40px; margin-bottom: 12px; }
+    #view-idle h2 { font-size: 17px; margin-bottom: 8px; }
+    #view-idle p { color: #6b7280; font-size: 13px; margin-bottom: 24px; line-height: 1.5; }
+
+    /* ---- Loading ---- */
+    #view-loading { text-align: center; padding: 48px 20px; }
+    .spinner-wrap { display: flex; align-items: center; justify-content: center; gap: 12px; }
+    .spin {
+      width: 24px; height: 24px; border: 3px solid #e5e7eb;
+      border-top-color: #3b82f6; border-radius: 50%;
+      animation: rotate 0.8s linear infinite;
+    }
+    @keyframes rotate { to { transform: rotate(360deg); } }
+    #view-loading p { color: #6b7280; font-size: 14px; margin-top: 16px; }
+
+    /* ---- Result ---- */
+    .grade-badge {
+      display: flex; align-items: center; gap: 14px;
+      background: white; border-radius: 12px;
+      padding: 14px 16px; margin-bottom: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    .grade-circle {
+      width: 52px; height: 52px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px; font-weight: 700; color: white; flex-shrink: 0;
+    }
+    .grade-info { flex: 1; }
+    .grade-label { font-size: 12px; color: #6b7280; font-weight: 500; }
+    .grade-score { font-size: 20px; font-weight: 700; color: #111; }
+    .grade-subtitle { font-size: 12px; color: #9ca3af; margin-top: 1px; }
+
+    .card {
+      background: white; border-radius: 10px; padding: 14px;
+      margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .extraction-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+    .tag {
+      background: #f3f4f6; border-radius: 20px; padding: 3px 10px;
+      font-size: 12px; color: #374151;
+    }
+    .tag.cert { background: #d1fae5; color: #065f46; cursor: pointer; }
+
+    .explanation { font-size: 13px; color: #374151; line-height: 1.6; }
+
+    .score-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 6px 0; border-bottom: 1px solid #f3f4f6; font-size: 13px;
+    }
+    .score-row:last-child { border-bottom: none; }
+    .score-label { color: #555; }
+    .score-val { font-weight: 600; color: #1f2937; }
+    .score-bar-wrap { width: 60px; height: 4px; background: #f3f4f6; border-radius: 2px; margin-left: 8px; }
+    .score-bar { height: 100%; border-radius: 2px; }
+
+    .alt-row {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      padding: 8px 0; border-bottom: 1px solid #f3f4f6;
+    }
+    .alt-row:last-child { border-bottom: none; }
+    .alt-name { font-size: 13px; font-weight: 500; color: #111; margin-bottom: 3px; }
+    .alt-reason { font-size: 11px; color: #9ca3af; }
+    .alt-from-page { font-size: 10px; color: #6b7280; font-style: italic; }
+    .alt-badge {
+      font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 10px;
+      color: white; flex-shrink: 0; margin-left: 10px; margin-top: 2px;
+    }
+
+    .not-right-link {
+      display: block; text-align: center; font-size: 12px; color: #9ca3af;
+      text-decoration: none; margin-top: 6px; cursor: pointer;
+    }
+    .not-right-link:hover { color: #6b7280; text-decoration: underline; }
+
+    /* ---- Expandable breakdown rows ---- */
+    .breakdown-row { border-bottom: 1px solid #f3f4f6; cursor: pointer; }
+    .breakdown-row:last-child { border-bottom: none; }
+    .breakdown-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 0;
+    }
+    .breakdown-chevron {
+      font-size: 10px; color: #9ca3af; transition: transform 0.15s ease;
+      flex-shrink: 0; margin-left: 4px;
+    }
+    .breakdown-row.open .breakdown-chevron { transform: rotate(90deg); }
+    .breakdown-detail {
+      display: none; padding: 0 0 10px 0;
+      font-size: 12px; color: #4b5563; line-height: 1.6;
+    }
+    .breakdown-row.open .breakdown-detail { display: block; }
+    .breakdown-tip {
+      margin-top: 6px; padding: 6px 8px;
+      background: #fff7ed; border-left: 2px solid #f97316;
+      border-radius: 0 4px 4px 0; font-size: 12px; color: #92400e; line-height: 1.5;
+    }
+
+    /* ---- Product List ---- */
+    .list-count-badge {
+      background: #3b82f6; color: white; font-size: 12px; font-weight: 700;
+      padding: 2px 8px; border-radius: 10px; min-width: 20px; text-align: center;
+    }
+    .product-list-item {
+      background: white; border-radius: 10px; padding: 12px;
+      margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      cursor: pointer;
+    }
+    .product-list-item .list-header {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .list-grade-circle {
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 700; color: white; flex-shrink: 0;
+    }
+    .list-product-body { flex: 1; min-width: 0; }
+    .list-product-name {
+      font-size: 13px; font-weight: 600; color: #111;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .list-product-meta {
+      display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px;
+    }
+    .list-product-meta .tag { font-size: 11px; padding: 1px 7px; }
+    .list-score-text {
+      font-size: 14px; font-weight: 700; color: #1f2937;
+      flex-shrink: 0; margin-left: 4px;
+    }
+    .list-chevron {
+      font-size: 10px; color: #9ca3af; transition: transform 0.15s ease;
+      flex-shrink: 0; margin-left: 2px;
+    }
+    .product-list-item.open .list-chevron { transform: rotate(90deg); }
+    .list-breakdown {
+      display: none; padding: 10px 0 0 46px;
+    }
+    .product-list-item.open .list-breakdown { display: block; }
+
+    /* ---- Cert popover ---- */
+    .cert-popover {
+      position: fixed; background: white;
+      border: 1px solid #e5e7eb; border-radius: 10px;
+      padding: 12px 14px; width: 240px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+      font-size: 12px; color: #374151; line-height: 1.6;
+      z-index: 1000; display: none;
+    }
+    .cert-popover.visible { display: block; }
+    .cert-popover-title {
+      font-weight: 600; font-size: 13px; margin-bottom: 6px;
+      color: #111; padding-right: 16px;
+    }
+    .cert-popover-close {
+      position: absolute; top: 8px; right: 10px;
+      font-size: 16px; color: #9ca3af; cursor: pointer; line-height: 1;
+    }
+    .cert-popover-close:hover { color: #6b7280; }
+
+    /* ---- Correction ---- */
+    #view-correction h3 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    #view-correction p { font-size: 13px; color: #6b7280; margin-bottom: 16px; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 12px; font-weight: 600;
+      color: #374151; margin-bottom: 4px; }
+    .form-group input, .form-group select {
+      width: 100%; padding: 8px 10px; border: 1px solid #d1d5db;
+      border-radius: 6px; font-size: 14px; color: #1f2937; background: white;
+    }
+    .form-group input:focus, .form-group select:focus {
+      outline: none; border-color: #3b82f6;
+    }
+
+    /* ---- Non-seafood ---- */
+    #view-non-seafood { text-align: center; padding: 32px 20px; }
+    #view-non-seafood .icon { font-size: 40px; margin-bottom: 12px; }
+    #view-non-seafood h2 { font-size: 16px; margin-bottom: 8px; }
+    #view-non-seafood p { color: #6b7280; font-size: 13px; line-height: 1.5; margin-bottom: 16px; }
+    .mockup {
+      background: white; border-radius: 10px; padding: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: left;
+      opacity: 0.6; margin-bottom: 16px;
+    }
+    .mockup-badge { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .mockup-grade {
+      width: 36px; height: 36px; border-radius: 50%; background: #22c55e;
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-weight: 700; font-size: 16px;
+    }
+    .mockup-text { font-size: 13px; }
+    .mockup-score { font-weight: 600; }
+
+    /* ---- Error ---- */
+    #view-error { text-align: center; padding: 40px 20px; }
+    #view-error .icon { font-size: 36px; margin-bottom: 12px; }
+    #view-error h2 { font-size: 15px; margin-bottom: 8px; color: #ef4444; }
+    #view-error p { color: #6b7280; font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+
+    .footer {
+      padding: 12px 20px; font-size: 11px; color: #d1d5db; text-align: center;
+      border-top: 1px solid #f3f4f6; margin-top: 8px;
+    }
+
+    /* ---- Voice Mode ---- */
     .view.voice-mode.active { display: flex; }
+    #view-voice { padding: 16px; flex-direction: column; gap: 12px; }
 
-    /* Mic indicator — pulsing rings */
     .voice-indicator {
       width: 64px; height: 64px; border-radius: 50%;
       background: #1a73e8; margin: 0 auto;
@@ -62,15 +269,13 @@
     .voice-indicator.speaking::after { border-color: #34a853; }
     .voice-indicator.thinking { background: #fbbc04; animation: none; }
 
-    /* Status label */
     .voice-status { text-align: center; font-size: 13px; color: #6b7280; }
 
-    /* Voice result card — compact version of the full score */
     .voice-result-card {
       background: white; border-radius: 10px;
       border: 1px solid #e5e7eb; padding: 12px;
     }
-    .voice-result-card .grade-badge {
+    .voice-result-card .vc-grade-badge {
       display: inline-flex; align-items: center; gap: 6px;
       font-size: 20px; font-weight: 700;
     }
@@ -79,26 +284,18 @@
     .voice-result-card .grade-C { color: #92400e; }
     .voice-result-card .grade-D { color: #991b1b; }
     .voice-result-card .species-name { font-size: 13px; color: #374151; margin-top: 4px; }
-    .voice-result-card .score-bar-wrap { margin-top: 8px; }
-    .voice-result-card .score-bar {
+    .voice-result-card .vc-score-bar-wrap { margin-top: 8px; }
+    .voice-result-card .vc-score-bar {
       height: 6px; border-radius: 3px; background: #e5e7eb;
     }
-    .voice-result-card .score-bar-fill { height: 100%; border-radius: 3px; }
-    .voice-result-card .alt-chip {
+    .voice-result-card .vc-score-bar-fill { height: 100%; border-radius: 3px; }
+    .alt-chip {
       display: inline-block; font-size: 11px; padding: 2px 8px;
       border-radius: 12px; background: #eff6ff; color: #1d4ed8;
       margin-top: 6px; margin-right: 4px;
     }
+    .alt-label { font-size: 11px; color: #6b7280; margin-top: 6px; }
 
-    /* Secondary outline button (e.g. Start Voice Mode) */
-    .btn-secondary {
-      width: 100%; padding: 10px; margin-top: 8px; background: transparent;
-      border: 1px solid #1a73e8; border-radius: 8px; color: #1a73e8;
-      font-size: 14px; font-weight: 500; cursor: pointer;
-    }
-    .btn-secondary:hover { background: #eff6ff; }
-
-    /* Stop button */
     .btn-stop {
       width: 100%; padding: 10px; background: transparent;
       border: 1px solid #d1d5db; border-radius: 8px;
@@ -106,69 +303,207 @@
     }
     .btn-stop:hover { background: #f9fafb; }
 
-    /* Inline text-link button (e.g. Restart after session end) */
     .btn-text-link {
       color: #1a73e8; background: none; border: none;
       cursor: pointer; font-size: 13px;
     }
     .btn-text-link:hover { text-decoration: underline; }
 
-    /* Alt-label in voice score card */
-    .alt-label { font-size: 11px; color: #6b7280; margin-top: 6px; }
+    /* Voice button on idle view — outline style */
+    #start-voice-btn {
+      border-color: #1a73e8; color: #1a73e8;
+    }
+    #start-voice-btn:hover { background: #eff6ff; }
   </style>
 </head>
 <body>
 
-  <!-- Onboarding view (first run only) -->
-  <div class="view onboarding" id="view-onboarding">
+  <!-- View: Onboarding -->
+  <div class="view" id="view-onboarding">
     <div class="onboarding-icon">🐟</div>
     <h1>Welcome to SeaSussed</h1>
-    <p>Get instant sustainability scores for seafood while you shop online.</p>
+    <p>Instant sustainability scores for seafood while you shop online.</p>
     <div class="notice">
-      📷 When you click Analyze, a screenshot of the current page is sent to
-      SeaSussed's servers to identify the seafood product. Screenshots are not stored.
+      📷 When you click Analyze, a screenshot of the current tab is sent to SeaSussed's
+      servers to identify the seafood product. Screenshots are not stored after analysis.
     </div>
-    <p>Works on any grocery website — Whole Foods, Amazon Fresh, Instacart, and more.</p>
+    <p style="font-size:13px; color:#6b7280;">
+      Works on any grocery website — Whole Foods, Amazon Fresh, Instacart, and more.
+    </p>
     <br>
     <button class="btn-primary" id="onboarding-ok">Got it — Let's go</button>
   </div>
 
-  <!-- Idle view (default after onboarding) -->
-  <div class="view idle" id="view-idle">
-    <div style="font-size:36px; margin-bottom:12px;">🐠</div>
+  <!-- View: Idle -->
+  <div class="view" id="view-idle">
+    <div class="icon">🐠</div>
     <h2>SeaSussed</h2>
-    <p>Navigate to a seafood product page<br>and click Analyze.</p>
+    <p>Navigate to a seafood product page, then click Analyze to get a sustainability score.</p>
     <button class="btn-primary" id="analyze-btn">Analyze This Page</button>
     <button class="btn-secondary" id="start-voice-btn">🎤 Start Voice Mode</button>
   </div>
 
-  <!-- Other views: loading, result, correction, non-seafood, error -->
-  <!-- Phase 5 will implement these views fully -->
+  <!-- View: Loading -->
+  <div class="view" id="view-loading">
+    <div class="spinner-wrap"><div class="spin"></div></div>
+    <p>Analyzing seafood…</p>
+  </div>
 
-  <!-- Voice mode view -->
-  <div class="view voice-mode" id="view-voice">
-
-    <!-- Mic indicator -->
-    <div class="voice-indicator" id="voice-indicator">
-      🎤
+  <!-- View: Result -->
+  <div class="view" id="view-result">
+    <!-- Grade badge -->
+    <div class="grade-badge" id="grade-badge">
+      <div class="grade-circle" id="grade-circle">A</div>
+      <div class="grade-info">
+        <div class="grade-label" id="grade-emoji-label">🟢 Best Choice</div>
+        <div class="grade-score" id="grade-score-text">84/100</div>
+        <div class="grade-subtitle">SeaSussed Score</div>
+      </div>
     </div>
+
+    <!-- Extracted info tags -->
+    <div class="card">
+      <div class="section-title">What we found on the page</div>
+      <div class="extraction-row" id="extraction-tags"></div>
+      <div class="explanation" id="explanation-text"></div>
+    </div>
+
+    <!-- Score breakdown -->
+    <div class="card">
+      <div class="section-title">Score Breakdown</div>
+      <div id="breakdown-rows"></div>
+    </div>
+
+    <!-- Alternatives -->
+    <div class="card" id="alternatives-card" style="display:none">
+      <div class="section-title" id="alternatives-title">Better Alternatives</div>
+      <div id="alternatives-list"></div>
+      <div id="category-page-tip" style="display:none; margin-top:10px; font-size:12px; color:#6b7280; line-height:1.5;"></div>
+    </div>
+
+    <!-- Not right link -->
+    <a class="not-right-link" id="not-right-link">Not right? Correct the details</a>
+
+    <!-- Analyze again -->
+    <button class="btn-secondary" id="analyze-again-btn">Analyze Again</button>
+
+    <div class="footer">Screenshots not stored · SeaSussed</div>
+  </div>
+
+  <!-- View: Product List (multi-product results) -->
+  <div class="view" id="view-results-list">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+      <h2 style="font-size:16px; font-weight:700; flex:1;">Seafood on This Page</h2>
+      <span class="list-count-badge" id="list-count-badge">0</span>
+    </div>
+    <div id="product-list"></div>
+    <button class="btn-secondary" id="list-analyze-again-btn">Analyze Again</button>
+    <div class="footer">Screenshots not stored &middot; SeaSussed</div>
+  </div>
+
+  <!-- View: Correction -->
+  <div class="view" id="view-correction">
+    <h3>Correct the Details</h3>
+    <p>Update the fields below. Score will recalculate based on your corrections.</p>
+
+    <div class="form-group">
+      <label for="corr-species">Species</label>
+      <input type="text" id="corr-species" placeholder="e.g. Alaska sockeye salmon">
+    </div>
+    <div class="form-group">
+      <label for="corr-wild-farmed">Wild or Farmed</label>
+      <select id="corr-wild-farmed">
+        <option value="unknown">Unknown</option>
+        <option value="wild">Wild</option>
+        <option value="farmed">Farmed</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="corr-method">Fishing / Farming Method</label>
+      <select id="corr-method">
+        <option value="">Unknown</option>
+        <option value="Pole and line">Pole and line</option>
+        <option value="Hook and line">Hook and line</option>
+        <option value="Troll">Troll</option>
+        <option value="Pot / Trap">Pot / Trap</option>
+        <option value="Purse seine (without FAD)">Purse seine (without FAD)</option>
+        <option value="Purse seine (with FAD)">Purse seine (with FAD)</option>
+        <option value="Gillnet">Gillnet</option>
+        <option value="Longline (surface)">Longline (surface)</option>
+        <option value="Longline (demersal)">Longline (demersal)</option>
+        <option value="Midwater trawl">Midwater trawl</option>
+        <option value="Bottom trawl">Bottom trawl</option>
+        <option value="Aquaculture (recirculating)">Aquaculture (recirculating)</option>
+        <option value="Aquaculture (pond)">Aquaculture (pond)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="corr-origin">Origin Region</label>
+      <input type="text" id="corr-origin" placeholder="e.g. Bristol Bay, Alaska">
+    </div>
+    <div class="form-group">
+      <label for="corr-certs">Certifications (comma-separated)</label>
+      <input type="text" id="corr-certs" placeholder="e.g. MSC, ASC">
+    </div>
+
+    <button class="btn-primary" id="correction-submit-btn">Recalculate Score</button>
+    <button class="btn-secondary" id="correction-cancel-btn">Cancel</button>
+  </div>
+
+  <!-- View: Non-seafood -->
+  <div class="view" id="view-non-seafood">
+    <div class="icon">🌊</div>
+    <h2>No seafood detected</h2>
+    <p>Navigate to a seafood product page and click Analyze to see a sustainability score.</p>
+
+    <div class="mockup">
+      <div class="section-title" style="margin-bottom:8px;">Example</div>
+      <div class="mockup-badge">
+        <div class="mockup-grade">A</div>
+        <div class="mockup-text">
+          <div class="mockup-score">84/100 · Best Choice 🟢</div>
+          <div style="font-size:11px; color:#9ca3af;">Alaska Sockeye Salmon</div>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-secondary" id="non-seafood-back-btn">← Try another page</button>
+  </div>
+
+  <!-- View: Error -->
+  <div class="view" id="view-error">
+    <div class="icon">⚠️</div>
+    <h2>Analysis Failed</h2>
+    <p id="error-message">Something went wrong. Please try again.</p>
+    <button class="btn-primary" id="error-retry-btn">Try Again</button>
+    <button class="btn-secondary" id="error-back-btn">Back</button>
+  </div>
+
+  <!-- View: Voice Mode -->
+  <div class="view voice-mode" id="view-voice">
+    <div class="voice-indicator" id="voice-indicator">🎤</div>
     <div class="voice-status" id="voice-status">Connecting...</div>
 
     <!-- Score card (hidden until first result) -->
     <div class="voice-result-card" id="voice-result-card" style="display:none">
-      <div class="grade-badge" id="vc-grade-badge">—</div>
+      <div class="vc-grade-badge" id="vc-grade-badge">—</div>
       <div class="species-name" id="vc-species">—</div>
-      <div class="score-bar-wrap">
-        <div class="score-bar">
-          <div class="score-bar-fill" id="vc-score-fill" style="width:0%"></div>
+      <div class="vc-score-bar-wrap">
+        <div class="vc-score-bar">
+          <div class="vc-score-bar-fill" id="vc-score-fill" style="width:0%"></div>
         </div>
       </div>
       <div id="vc-alternatives"></div>
     </div>
 
-    <!-- Stop button -->
     <button class="btn-stop" id="stop-voice-btn">End voice session</button>
+  </div>
 
+  <!-- Cert definition popover (shared singleton) -->
+  <div id="cert-popover" class="cert-popover">
+    <span class="cert-popover-close" id="cert-popover-close">×</span>
+    <div class="cert-popover-title" id="cert-popover-title"></div>
+    <div id="cert-popover-body"></div>
   </div>
 
   <script src="config.js"></script>
