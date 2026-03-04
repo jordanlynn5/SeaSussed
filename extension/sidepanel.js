@@ -98,15 +98,18 @@ function stopVoiceBar() {
 
 document.getElementById('voice-bar-stop')?.addEventListener('click', stopVoiceBar);
 
-async function connectVoice(data, listCount = 0) {
-  if (voiceClient !== null) return;
+async function connectVoice(data, listCount = 0, preStream = null) {
+  if (voiceClient !== null) {
+    if (preStream) preStream.getTracks().forEach(t => t.stop());
+    return;
+  }
   voiceClient = new VoiceClient();
   voiceClient.onStatus = updateVoiceBar;
   voiceClient.onScoreResult = () => {};
   voiceClient.onError = () => stopVoiceBar();
   showVoiceBar('Connecting…');
   try {
-    await voiceClient.start();
+    await voiceClient.start(preStream);
     updateVoiceBar('listening');
     voiceClient.sendResultContext({
       score: data.score,
@@ -139,16 +142,31 @@ async function startVoiceAfterResult(data, listCount = 0) {
     return;
   }
 
-  // 'prompt' — show Enable Voice button; user click provides the gesture
+  // 'prompt' — getUserMedia must be the first await in the gesture handler
   const bar = document.getElementById('voice-bar');
   const status = document.getElementById('voice-bar-status');
   if (!bar || !status) return;
   bar.style.display = 'flex';
-  status.innerHTML = '<button id="voice-enable-btn" class="vbar-enable">Enable Voice</button>';
-  document.getElementById('voice-enable-btn')?.addEventListener('click', () => {
-    status.textContent = 'Connecting…';
-    connectVoice(data, listCount);
-  });
+  function attachEnableBtn() {
+    status.innerHTML = '<button id="voice-enable-btn" class="vbar-enable">Enable Voice</button>';
+    document.getElementById('voice-enable-btn')?.addEventListener('click', async () => {
+      document.getElementById('voice-enable-btn')?.remove();
+      status.textContent = 'Requesting mic…';
+      let stream;
+      try {
+        // getUserMedia must be the first await — preserves Chrome's user activation
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true },
+        });
+      } catch (e) {
+        console.warn('[SeaSussed] Mic permission:', e.name, e.message);
+        attachEnableBtn(); // re-show button on failure
+        return;
+      }
+      connectVoice(data, listCount, stream);
+    });
+  }
+  attachEnableBtn();
 }
 
 // ── Analyze ──

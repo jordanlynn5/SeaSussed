@@ -19,9 +19,9 @@ class VoiceClient {
 
   // ── Public API ──────────────────────────────────────────
 
-  async start() {
-    // 1. Get microphone permission
-    this.micStream = await navigator.mediaDevices.getUserMedia({
+  async start(preAcquiredStream = null) {
+    // 1. Get microphone (use pre-acquired stream if provided to avoid re-requesting permission)
+    this.micStream = preAcquiredStream ?? await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true },
     });
 
