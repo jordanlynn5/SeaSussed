@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from main import app
@@ -35,6 +36,20 @@ def test_analyze_missing_screenshot_returns_400() -> None:
         json={"screenshot": "", "url": "https://example.com"},
     )
     assert response.status_code == 400
+
+
+def test_rate_limit_exceeded() -> None:
+    """11th request from the same IP within 60s raises 429."""
+    from main import _check_rate_limit, _request_times
+
+    ip = "test-rate-limit-ip"
+    _request_times.pop(ip, None)  # clean state
+    for _ in range(10):
+        _check_rate_limit(ip)  # should not raise
+    with pytest.raises(HTTPException) as exc:
+        _check_rate_limit(ip)
+    assert exc.value.status_code == 429
+    _request_times.pop(ip, None)  # clean up
 
 
 # ---------------------------------------------------------------------------

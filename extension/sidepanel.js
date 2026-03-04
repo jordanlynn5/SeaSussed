@@ -215,8 +215,20 @@ async function triggerAnalyze() {
   chrome.runtime.sendMessage(
     { type: 'ANALYZE_PAGE', tabId: tab.id, url: tab.url },
     (result) => {
-      if (chrome.runtime.lastError || result?.error) {
-        showError(result?.error || chrome.runtime.lastError?.message || 'Unknown error');
+      if (chrome.runtime.lastError) {
+        showError(chrome.runtime.lastError?.message || 'Unknown error');
+        return;
+      }
+      if (result?.error === 'duplicate') {
+        showError("You've already scored this product. Navigate to a different product for a new score.");
+        return;
+      }
+      if (result?.error === 'cooldown') {
+        startCooldownUI(result.secondsRemaining);
+        return;
+      }
+      if (result?.error) {
+        showError(result.error);
         return;
       }
 
@@ -536,6 +548,45 @@ document.getElementById('correction-submit-btn')?.addEventListener('click', asyn
     showError(err.message);
   }
 });
+
+// ── Cooldown UI ──
+function startCooldownUI(secondsRemaining) {
+  const BUTTON_IDS = ['analyze-btn', 'analyze-again-btn', 'list-analyze-again-btn'];
+  const ORIGINAL_LABELS = {
+    'analyze-btn': 'Analyze This Page',
+    'analyze-again-btn': 'Analyze Again',
+    'list-analyze-again-btn': 'Analyze Again',
+  };
+
+  let secs = secondsRemaining;
+
+  BUTTON_IDS.forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.disabled = true;
+    btn.textContent = `Wait ${secs}s…`;
+  });
+
+  const interval = setInterval(() => {
+    secs -= 1;
+    if (secs <= 0) {
+      clearInterval(interval);
+      BUTTON_IDS.forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.disabled = false;
+        btn.textContent = ORIGINAL_LABELS[id];
+      });
+    } else {
+      BUTTON_IDS.forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.textContent = `Wait ${secs}s…`;
+      });
+    }
+  }, 1000);
+
+  // Stay on current view — don't redirect to error
+}
 
 // ── Error ──
 function showError(message) {

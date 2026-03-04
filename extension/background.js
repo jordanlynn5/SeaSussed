@@ -2,6 +2,9 @@
 importScripts('config.js');
 
 const pendingTabs = new Set();
+const COOLDOWN_MS = 15_000;
+const lastAnalyzedAt = {};   // tabId → timestamp (ms)
+const lastAnalyzedUrl = {};  // tabId → URL string
 
 // Toolbar icon click → open side panel
 chrome.action.onClicked.addListener((tab) => {
@@ -17,10 +20,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
 
+    const url = msg.url;
+
+    if (lastAnalyzedUrl[tabId] === url) {
+      sendResponse({ error: 'duplicate' });
+      return true;
+    }
+
+    const elapsed = Date.now() - (lastAnalyzedAt[tabId] ?? 0);
+    if (elapsed < COOLDOWN_MS) {
+      const secondsRemaining = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+      sendResponse({ error: 'cooldown', secondsRemaining });
+      return true;
+    }
+
     pendingTabs.add(tabId);
-    handleAnalyze(tabId, msg.url)
+    handleAnalyze(tabId, url)
       .then(result => {
         pendingTabs.delete(tabId);
+        lastAnalyzedAt[tabId] = Date.now();
+        lastAnalyzedUrl[tabId] = url;
         sendResponse(result);
       })
       .catch(err => {
