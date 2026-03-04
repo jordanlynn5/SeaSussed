@@ -138,10 +138,18 @@ class VoiceSession:
                 score = msg.get("score", 0)
                 species = msg.get("species") or "this seafood product"
                 wild_or_farmed = msg.get("wild_or_farmed", "unknown")
-                text = (
-                    f"[RESULT] The user just scored {species} ({wild_or_farmed}). "
-                    f"Grade: {grade}, Score: {score}/100. React to this result now."
-                )
+                list_count = msg.get("list_count", 0)
+                if list_count > 1:
+                    text = (
+                        f"[RESULT] The user found {list_count} seafood products on this page. "
+                        f"Best: {species} ({wild_or_farmed}), "
+                        f"Grade: {grade}, Score: {score}/100. React to this result now."
+                    )
+                else:
+                    text = (
+                        f"[RESULT] The user just scored {species} ({wild_or_farmed}). "
+                        f"Grade: {grade}, Score: {score}/100. React to this result now."
+                    )
                 await session.send_client_content(
                     turns=types.Content(role="user", parts=[types.Part(text=text)]),
                     turn_complete=True,

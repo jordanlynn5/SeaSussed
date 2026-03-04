@@ -255,10 +255,11 @@
     .gg-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #374151; }
     .gg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
-    /* ── Voice bar (inside view-result) ── */
-    .voice-bar { display: flex; align-items: center; gap: 8px;
-      background: #f0f9ff; border: 1px solid #bae6fd;
-      border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+    /* ── Voice bar (fixed bottom, works over any view) ── */
+    .voice-bar { position: fixed; bottom: 0; left: 0; right: 0;
+      display: flex; align-items: center; gap: 8px;
+      background: #f0f9ff; border-top: 1px solid #bae6fd;
+      padding: 10px 16px; z-index: 100; }
     .vbar-dot { width: 8px; height: 8px; border-radius: 50%;
       background: #3b82f6; flex-shrink: 0; }
     .vbar-dot.speaking { background: #22c55e; }
@@ -359,13 +360,6 @@
     <!-- Not right link -->
     <a class="not-right-link" id="not-right-link">Not right? Correct the details</a>
 
-    <!-- Voice bar -->
-    <div id="voice-bar" class="voice-bar" style="display:none">
-      <div id="voice-bar-indicator" class="vbar-dot"></div>
-      <span id="voice-bar-status">Connecting…</span>
-      <button id="voice-bar-stop" class="vbar-stop">End</button>
-    </div>
-
     <!-- Analyze again -->
     <button class="btn-secondary" id="analyze-again-btn">Analyze Again</button>
 
@@ -459,6 +453,13 @@
     <p id="error-message">Something went wrong. Please try again.</p>
     <button class="btn-primary" id="error-retry-btn">Try Again</button>
     <button class="btn-secondary" id="error-back-btn">Back</button>
+  </div>
+
+  <!-- Voice bar (fixed bottom, shown over any result view) -->
+  <div id="voice-bar" class="voice-bar" style="display:none">
+    <div id="voice-bar-indicator" class="vbar-dot"></div>
+    <span id="voice-bar-status">Connecting…</span>
+    <button id="voice-bar-stop" class="vbar-stop">End</button>
   </div>
 
   <!-- Cert definition popover (shared singleton) -->

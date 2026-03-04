@@ -98,7 +98,7 @@ function stopVoiceBar() {
 
 document.getElementById('voice-bar-stop')?.addEventListener('click', stopVoiceBar);
 
-async function connectVoice(data) {
+async function connectVoice(data, listCount = 0) {
   if (voiceClient !== null) return;
   voiceClient = new VoiceClient();
   voiceClient.onStatus = updateVoiceBar;
@@ -113,6 +113,7 @@ async function connectVoice(data) {
       grade: data.grade,
       species: data.product_info?.species ?? null,
       wild_or_farmed: data.product_info?.wild_or_farmed ?? 'unknown',
+      list_count: listCount,
     });
   } catch (err) {
     console.warn('[SeaSussed] Voice start failed:', err.message);
@@ -121,7 +122,7 @@ async function connectVoice(data) {
   }
 }
 
-async function startVoiceAfterResult(data) {
+async function startVoiceAfterResult(data, listCount = 0) {
   // getUserMedia requires a user gesture the first time mic permission is requested.
   // Check permission state: if already granted, auto-connect; if prompt, show
   // an "Enable Voice" button so the user's click supplies the gesture; if denied, skip.
@@ -134,7 +135,7 @@ async function startVoiceAfterResult(data) {
   if (micState === 'denied') return; // mic blocked — skip silently
 
   if (micState === 'granted') {
-    connectVoice(data);
+    connectVoice(data, listCount);
     return;
   }
 
@@ -146,7 +147,7 @@ async function startVoiceAfterResult(data) {
   status.innerHTML = '<button id="voice-enable-btn" class="vbar-enable">Enable Voice</button>';
   document.getElementById('voice-enable-btn')?.addEventListener('click', () => {
     status.textContent = 'Connecting…';
-    connectVoice(data);
+    connectVoice(data, listCount);
   });
 }
 
@@ -279,6 +280,15 @@ function renderProductList(products) {
   });
 
   showView('view-results-list');
+
+  if (products.length > 0) {
+    const best = products[0];
+    startVoiceAfterResult({
+      score: best.score,
+      grade: best.grade,
+      product_info: { species: best.species ?? null, wild_or_farmed: best.wild_or_farmed ?? 'unknown' },
+    }, products.length);
+  }
 }
 
 // ── Render Result ──
