@@ -29,8 +29,6 @@ def generate_content(
 
     Falls back to template content if the API call fails or returns unparseable JSON.
     """
-    client = get_genai_client()
-
     # Build visibility context
     visible: list[str] = []
     unknown: list[str] = []
@@ -130,6 +128,7 @@ Return ONLY valid JSON in this exact structure:
 }}"""
 
     try:
+        client = get_genai_client()
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,

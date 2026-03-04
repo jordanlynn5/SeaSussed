@@ -277,6 +277,116 @@ ALTERNATIVES = [
     ),
 ]
 
+# ---------------------------------------------------------------------------
+# Supplementary data: grocery-product common names + shellfish species
+# that FishBase (finfish-focused) doesn't cover or uses different names for.
+# These are the exact names Gemini returns from grocery product screenshots.
+# ---------------------------------------------------------------------------
+
+# Extra aliases to insert AFTER FishBase ingest.
+# Format: (alias, scientific_name_must_exist_in_species_table)
+SUPPLEMENTARY_ALIASES = [
+    # Sockeye salmon — Gemini returns "Alaska sockeye salmon"; FishBase only has "Sockeye salmon"
+    ("Alaska sockeye salmon", "Oncorhynchus nerka"),
+    ("Wild Alaska sockeye salmon", "Oncorhynchus nerka"),
+    ("Bristol Bay sockeye salmon", "Oncorhynchus nerka"),
+    ("Copper River sockeye salmon", "Oncorhynchus nerka"),
+    # Chinook / King salmon
+    ("King salmon", "Oncorhynchus tshawytscha"),
+    ("Wild King salmon", "Oncorhynchus tshawytscha"),
+    ("Alaska King salmon", "Oncorhynchus tshawytscha"),
+    # Coho
+    ("Silver salmon", "Oncorhynchus kisutch"),
+    ("Wild coho salmon", "Oncorhynchus kisutch"),
+    # Pollock
+    ("Wild Alaska pollock", "Gadus chalcogrammus"),
+    ("Alaskan pollock", "Gadus chalcogrammus"),
+    # Atlantic cod
+    ("Cod", "Gadus morhua"),
+    ("North Atlantic cod", "Gadus morhua"),
+    # Bluefin tuna
+    ("Atlantic bluefin tuna", "Thunnus thynnus"),
+    ("Pacific bluefin tuna", "Thunnus orientalis"),
+]
+
+# Hand-coded seed species for shellfish and other non-FishBase species.
+# Data sourced from peer-reviewed FishBase-equivalent sources (SeaLifeBase, FAO).
+# Format: (scientific_name, vulnerability, resilience, iucn_code,
+#          trophic_level, carnivory_ratio, stock_exploitation, common_name)
+SUPPLEMENTARY_SPECIES = [
+    # Pacific oyster — filter feeder, farmed globally, excellent sustainability
+    (
+        "Magallana gigas",
+        28.0,      # low vulnerability (fast-growing bivalve)
+        "High",    # high resilience
+        "LC",      # IUCN Least Concern
+        2.1,       # trophic level: filter feeder
+        0.0,       # carnivory_ratio: pure filter feeder
+        "not overexploited",
+        "Pacific oyster",
+    ),
+    # Eastern oyster (US farmed)
+    (
+        "Crassostrea virginica",
+        30.0,
+        "High",
+        "LC",
+        2.1,
+        0.0,
+        "not overexploited",
+        "Eastern oyster",
+    ),
+    # Blue mussel — farmed, very sustainable
+    (
+        "Mytilus edulis",
+        25.0,
+        "High",
+        "LC",
+        2.1,
+        0.0,
+        "not overexploited",
+        "Blue mussel",
+    ),
+    # Whiteleg shrimp — most-farmed shrimp globally
+    (
+        "Litopenaeus vannamei",
+        50.0,
+        "High",
+        "LC",
+        2.4,
+        0.25,      # low carnivory (omnivore, fed plant-heavy diet in aquaculture)
+        "fully exploited",
+        "Whiteleg shrimp",
+    ),
+    # Atlantic scallop — US managed, hook-and-line plus dredge
+    (
+        "Placopecten magellanicus",
+        40.0,
+        "Medium",
+        "LC",
+        2.5,
+        0.0,
+        "not overexploited",
+        "Sea scallop",
+    ),
+]
+
+# Supplementary NOAA entries for species with grocery-common names not in the seed.
+SUPPLEMENTARY_NOAA = [
+    ("Alaska sockeye salmon", "Oncorhynchus nerka",
+     "Not subject to overfishing", "Not overfished",
+     "Low impact; managed by ADF&G", "Very low with selective gear"),
+    ("Wild Alaska sockeye salmon", "Oncorhynchus nerka",
+     "Not subject to overfishing", "Not overfished",
+     "Low impact; managed by ADF&G", "Very low with selective gear"),
+    ("Pacific oyster", "Magallana gigas",
+     "Not subject to overfishing", "Not overfished",
+     "Aquaculture; filters and improves water quality", "Not applicable for farmed"),
+    ("Whiteleg shrimp", "Litopenaeus vannamei",
+     "Unknown", "Unknown",
+     "Pond aquaculture; varies by farm", "Not applicable for farmed"),
+]
+
 # IUCN code → stock_exploitation mapping
 # LC = Least Concern → not overexploited
 # NT = Near Threatened → fully exploited
@@ -744,6 +854,57 @@ def seed_alternatives(conn: sqlite3.Connection) -> None:
     print(f"  Seeded {len(ALTERNATIVES)} alternative entries")
 
 
+def seed_supplementary_data(conn: sqlite3.Connection) -> None:
+    """Insert supplementary species + aliases after FishBase ingest.
+
+    This covers grocery-common names Gemini returns that FishBase doesn't
+    include (primarily shellfish) and aliases for species where FishBase
+    uses a different common name than what appears on grocery packaging.
+    """
+    # Insert supplementary species (shellfish etc. not in FishBase)
+    for (sci, vuln, res, iucn, trophic, carnivory, exploit, common) in SUPPLEMENTARY_SPECIES:
+        exploit_val = exploit if exploit else None
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO species
+              (scientific_name, vulnerability, resilience, iucn_code,
+               trophic_level, carnivory_ratio, stock_exploitation, common_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (sci, vuln, res, iucn, trophic, carnivory, exploit_val, common),
+        )
+        # Also insert the common name as an alias
+        conn.execute(
+            "INSERT OR IGNORE INTO common_name_aliases (alias, scientific_name) VALUES (?, ?)",
+            (common, sci),
+        )
+
+    # Insert supplementary aliases (grocery names → existing FishBase species)
+    for alias, sci in SUPPLEMENTARY_ALIASES:
+        conn.execute(
+            "INSERT OR IGNORE INTO common_name_aliases (alias, scientific_name) VALUES (?, ?)",
+            (alias, sci),
+        )
+
+    # Insert supplementary NOAA entries
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO noaa_species
+          (common_name, scientific_name, fishing_rate, population_status,
+           habitat_impact, bycatch)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        SUPPLEMENTARY_NOAA,
+    )
+
+    conn.commit()
+    print(
+        f"  Seeded {len(SUPPLEMENTARY_SPECIES)} supplementary species, "
+        f"{len(SUPPLEMENTARY_ALIASES)} aliases, "
+        f"{len(SUPPLEMENTARY_NOAA)} NOAA entries"
+    )
+
+
 def ingest_fishbase(conn: sqlite3.Connection) -> None:
     """Download FishBase species + stocks + ecology data via DuckDB Parquet.
 
@@ -1006,6 +1167,9 @@ def main() -> None:
 
     print("Ingesting NOAA FishWatch data…")
     ingest_noaa(conn)
+
+    print("Seeding supplementary species + aliases…")
+    seed_supplementary_data(conn)
 
     print("species rows:", conn.execute("SELECT COUNT(*) FROM species").fetchone()[0])
     print("aliases rows:", conn.execute("SELECT COUNT(*) FROM common_name_aliases").fetchone()[0])

@@ -175,8 +175,8 @@ If user dismisses the primary alternatives panel: show prompt "Want more options
 | 2 | Chrome Extension Scaffold | ✅ complete |
 | 3 | Sustainability Database | ✅ complete |
 | 4 | Gemini Agent Pipeline | ✅ complete |
-| 5 | Extension UI Integration | pending |
-| 6 | Testing & Optimization | pending |
+| 5 | Extension UI Integration | ✅ complete |
+| 6 | Testing & Optimization | ✅ complete |
 | 7 | Deployment & Submission | pending |
 
 **All phases are sequential.** No parallel execution.

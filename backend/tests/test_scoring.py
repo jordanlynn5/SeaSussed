@@ -4,6 +4,8 @@ These tests never call external APIs — they exercise only scoring.py + databas
 Run without Vertex AI credentials.
 """
 
+import pytest
+
 from models import ProductInfo
 from scoring import (
     compute_score,
@@ -13,6 +15,171 @@ from scoring import (
     score_management,
     score_wild_practices,
 )
+
+# ---------------------------------------------------------------------------
+# Parametrized grade-range tests
+# ---------------------------------------------------------------------------
+# Uses common names that the screen_analyzer returns from real grocery pages.
+# Grade ranges (min_grade–max_grade) reflect scoring with DB data present.
+# Expand the range if a species' DB entry produces a borderline score.
+# ---------------------------------------------------------------------------
+
+_GRADE_ORDER = ["A", "B", "C", "D"]
+
+_GRADE_TEST_CASES = [
+    (
+        "Alaska sockeye salmon — MSC, purse seine w/o FAD, Bristol Bay",
+        dict(
+            is_seafood=True,
+            species="Alaska sockeye salmon",
+            wild_or_farmed="wild",
+            fishing_method="Purse seine (without FAD)",
+            origin_region="Bristol Bay, Alaska",
+            certifications=["MSC"],
+        ),
+        "A",
+        "A",
+    ),
+    (
+        "Pacific oyster — farmed, ASC certified",
+        dict(
+            is_seafood=True,
+            species="Pacific oyster",
+            wild_or_farmed="farmed",
+            fishing_method=None,
+            origin_region="Pacific Northwest",
+            certifications=["ASC"],
+        ),
+        "A",
+        "A",
+    ),
+    (
+        "Atlantic mackerel — purse seine w/o FAD, no cert",
+        dict(
+            is_seafood=True,
+            species="Atlantic mackerel",
+            wild_or_farmed="wild",
+            fishing_method="Purse seine (without FAD)",
+            origin_region="North Atlantic",
+            certifications=[],
+        ),
+        "A",
+        "B",
+    ),
+    (
+        "Alaska pollock — midwater trawl, MSC, Bering Sea",
+        dict(
+            is_seafood=True,
+            species="Alaska pollock",
+            wild_or_farmed="wild",
+            fishing_method="Midwater trawl",
+            origin_region="Bering Sea",
+            certifications=["MSC"],
+        ),
+        "B",
+        "B",
+    ),
+    (
+        "Atlantic cod — bottom trawl, no cert, Norway",
+        dict(
+            is_seafood=True,
+            species="Atlantic cod",
+            wild_or_farmed="wild",
+            fishing_method="Bottom trawl",
+            origin_region="Norway",
+            certifications=[],
+        ),
+        "D",
+        "D",
+    ),
+    (
+        "Farmed Atlantic salmon — no cert, Norway",
+        dict(
+            is_seafood=True,
+            species="Atlantic salmon",
+            wild_or_farmed="farmed",
+            fishing_method=None,
+            origin_region="Norway",
+            certifications=[],
+        ),
+        "C",
+        "D",
+    ),
+    (
+        "Imported whiteleg shrimp — farmed, Thailand, no cert",
+        dict(
+            is_seafood=True,
+            species="whiteleg shrimp",
+            wild_or_farmed="farmed",
+            fishing_method=None,
+            origin_region="Thailand",
+            certifications=[],
+        ),
+        "C",
+        "D",
+    ),
+    (
+        "Bluefin tuna — longline surface, Atlantic, no cert",
+        dict(
+            is_seafood=True,
+            species="bluefin tuna",
+            wild_or_farmed="wild",
+            fishing_method="Longline (surface)",
+            origin_region="Atlantic",
+            certifications=[],
+        ),
+        "C",
+        "D",
+    ),
+    (
+        "Orange roughy — bottom trawl, New Zealand",
+        dict(
+            is_seafood=True,
+            species="orange roughy",
+            wild_or_farmed="wild",
+            fishing_method="Bottom trawl",
+            origin_region="New Zealand",
+            certifications=[],
+        ),
+        "D",
+        "D",
+    ),
+]
+
+
+@pytest.mark.parametrize("description,kwargs,min_grade,max_grade", _GRADE_TEST_CASES)
+def test_species_grade(
+    description: str, kwargs: dict[str, object], min_grade: str, max_grade: str
+) -> None:
+    """Each species scores within the expected sustainability grade range."""
+    product = ProductInfo(**kwargs)  # type: ignore[arg-type]
+    breakdown, total, grade = compute_score(product)
+    min_idx = _GRADE_ORDER.index(min_grade)
+    max_idx = _GRADE_ORDER.index(max_grade)
+    actual_idx = _GRADE_ORDER.index(grade)
+    assert min_idx <= actual_idx <= max_idx, (
+        f"{description}: expected {min_grade}–{max_grade}, got {grade} ({total})\n"
+        f"  biological={breakdown.biological:.1f}, practices={breakdown.practices:.1f}, "
+        f"  management={breakdown.management:.1f}, ecological={breakdown.ecological:.1f}"
+    )
+
+
+def test_farmed_oyster_uses_aquaculture_scorer() -> None:
+    """Farmed Pacific oyster (filter feeder) gets aquaculture scoring path."""
+    product = ProductInfo(
+        is_seafood=True,
+        species="Pacific oyster",
+        wild_or_farmed="farmed",
+        fishing_method=None,
+        origin_region=None,
+        certifications=[],
+    )
+    breakdown, _, _ = compute_score(product)
+    # Oysters are filter feeders — aquaculture scorer applies, not wild practices.
+    # Practices score should exceed the 10-pt unknown-gear penalty.
+    assert breakdown.practices >= 5.0, (
+        f"Expected aquaculture scorer (>=5 pts), got {breakdown.practices}"
+    )
 
 
 def test_msc_certified_wild_salmon_scores_high() -> None:
