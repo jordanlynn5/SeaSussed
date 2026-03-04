@@ -72,137 +72,53 @@ document.getElementById('onboarding-ok')?.addEventListener('click', () => {
   showView('view-idle');
 });
 
-// ── Voice mode: start ──
-document.getElementById('start-voice-btn')?.addEventListener('click', async () => {
+// ── Voice bar (inside view-result) ──
+function showVoiceBar(text) {
+  const bar = document.getElementById('voice-bar');
+  if (bar) bar.style.display = 'flex';
+  const s = document.getElementById('voice-bar-status');
+  if (s) s.textContent = text;
+}
+
+function updateVoiceBar(state) {
+  const dot = document.getElementById('voice-bar-indicator');
+  const status = document.getElementById('voice-bar-status');
+  if (!dot || !status) return;
+  dot.className = 'vbar-dot' + (state === 'speaking' ? ' speaking' : state === 'thinking' ? ' thinking' : '');
+  const labels = { listening: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking…' };
+  if (labels[state]) status.textContent = labels[state];
+  if (state === 'ended' || state === 'error') stopVoiceBar();
+}
+
+function stopVoiceBar() {
+  if (voiceClient) { voiceClient.stop(); voiceClient = null; }
+  const bar = document.getElementById('voice-bar');
+  if (bar) bar.style.display = 'none';
+}
+
+document.getElementById('voice-bar-stop')?.addEventListener('click', stopVoiceBar);
+
+async function startVoiceAfterResult(data) {
   if (voiceClient !== null) return;
-
   voiceClient = new VoiceClient();
-  voiceClient.onStatus = (state) => updateVoiceStatus(state);
-  voiceClient.onScoreResult = (score) => renderVoiceScore(score);
-  voiceClient.onError = () => {
-    updateVoiceStatus('error');
-    stopVoiceMode();
-    showView('view-idle');
-  };
-
-  showView('view-voice');
-  updateVoiceStatus('connecting');
-
+  voiceClient.onStatus = updateVoiceBar;
+  voiceClient.onScoreResult = () => {};
+  voiceClient.onError = () => stopVoiceBar();
+  showVoiceBar('Connecting…');
   try {
     await voiceClient.start();
-    updateVoiceStatus('listening');
+    updateVoiceBar('listening');
+    voiceClient.sendResultContext({
+      score: data.score,
+      grade: data.grade,
+      species: data.product_info?.species ?? null,
+      wild_or_farmed: data.product_info?.wild_or_farmed ?? 'unknown',
+    });
   } catch (err) {
-    console.error('[SeaSussed] Voice start failed:', err.message);
-    stopVoiceMode();
-    showView('view-idle');
-  }
-});
-
-// ── Voice mode: stop ──
-document.getElementById('stop-voice-btn')?.addEventListener('click', () => {
-  stopVoiceMode();
-  showView('view-idle');
-});
-
-function stopVoiceMode() {
-  if (voiceClient) {
-    voiceClient.stop();
+    console.warn('[SeaSussed] Voice start failed:', err.message);
+    stopVoiceBar();
     voiceClient = null;
   }
-  resetVoiceView();
-}
-
-function updateVoiceStatus(state) {
-  const indicator = document.getElementById('voice-indicator');
-  const statusEl  = document.getElementById('voice-status');
-  if (!indicator || !statusEl) return;
-
-  switch (state) {
-    case 'connecting':
-      indicator.className = 'voice-indicator';
-      statusEl.textContent = 'Connecting...';
-      break;
-    case 'listening':
-      indicator.className = 'voice-indicator';
-      statusEl.textContent = 'Listening — tell me about anything on the page';
-      break;
-    case 'thinking':
-      indicator.className = 'voice-indicator thinking';
-      statusEl.textContent = 'Checking that product...';
-      break;
-    case 'speaking':
-      indicator.className = 'voice-indicator speaking';
-      statusEl.textContent = 'SeaSussed is speaking...';
-      break;
-    case 'ended':
-      voiceClient = null;
-      showSessionEndedPrompt();
-      break;
-    case 'error':
-      statusEl.textContent = 'Error — tap Analyze to continue manually';
-      break;
-  }
-}
-
-function renderVoiceScore(score) {
-  const card    = document.getElementById('voice-result-card');
-  const badge   = document.getElementById('vc-grade-badge');
-  const species = document.getElementById('vc-species');
-  const fill    = document.getElementById('vc-score-fill');
-  const altsEl  = document.getElementById('vc-alternatives');
-  if (!card || !badge || !species || !fill || !altsEl) return;
-
-  const grade = score.grade;
-  const emoji = GRADE_EMOJI[grade] ?? '•';
-  const color = SCORE_FILL_COLOR[grade] ?? '#6b7280';
-
-  badge.className   = 'vc-grade-badge grade-' + grade;
-  badge.textContent = emoji + ' Grade ' + grade + '  ' + score.score + '/100';
-  species.textContent = score.product_info?.species ?? 'Seafood product';
-  fill.style.width      = score.score + '%';
-  fill.style.background = color;
-
-  altsEl.innerHTML = '';
-  if (score.alternatives?.length > 0) {
-    const label = document.createElement('div');
-    label.className = 'alt-label';
-    label.textContent = 'Try instead:';
-    altsEl.appendChild(label);
-    score.alternatives.slice(0, 2).forEach(alt => {
-      const chip = document.createElement('span');
-      chip.className = 'alt-chip';
-      chip.textContent = alt.species + ' ' + (GRADE_EMOJI[alt.grade] ?? '');
-      altsEl.appendChild(chip);
-    });
-  }
-
-  card.style.display = 'block';
-}
-
-document.addEventListener('click', (e) => {
-  if (e.target?.id === 'restart-voice-btn') {
-    resetVoiceView();
-    document.getElementById('start-voice-btn')?.click();
-  }
-});
-
-function showSessionEndedPrompt() {
-  const statusEl = document.getElementById('voice-status');
-  if (!statusEl) return;
-  statusEl.innerHTML =
-    'Session ended (15 min limit). ' +
-    '<button id="restart-voice-btn" class="btn-text-link">Restart</button>';
-}
-
-function resetVoiceView() {
-  const card      = document.getElementById('voice-result-card');
-  const indicator = document.getElementById('voice-indicator');
-  const statusEl  = document.getElementById('voice-status');
-  const altsEl    = document.getElementById('vc-alternatives');
-  if (card)      card.style.display      = 'none';
-  if (indicator) indicator.className     = 'voice-indicator';
-  if (statusEl)  statusEl.textContent    = 'Connecting...';
-  if (altsEl)    altsEl.innerHTML        = '';
 }
 
 // ── Analyze ──
@@ -463,6 +379,7 @@ function renderResult(data) {
   }
 
   showView('view-result');
+  startVoiceAfterResult(data);
 }
 
 // ── Cert popover ──

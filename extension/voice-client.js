@@ -22,11 +22,14 @@ class VoiceClient {
   async start() {
     // 1. Get microphone permission
     this.micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true },
+      audio: { channelCount: 1, echoCancellation: true },
     });
 
-    // 2. Create AudioContext (must happen after user gesture — satisfied by button click)
+    // 2. Create AudioContext and resume it (may be suspended when called outside a direct user gesture)
     this.audioContext = new AudioContext({ sampleRate: 16000 });
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+    }
     this.nextPlayTime = this.audioContext.currentTime;
 
     // 3. Load AudioWorklet
@@ -50,6 +53,11 @@ class VoiceClient {
     this.workletNode.port.onmessage = (e) => this._sendAudioChunk(e.data);
     source.connect(this.workletNode);
     // workletNode is NOT connected to destination — prevents mic echo
+  }
+
+  sendResultContext(ctx) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'result_context', ...ctx }));
   }
 
   stop() {

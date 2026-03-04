@@ -244,76 +244,29 @@
       border-top: 1px solid #f3f4f6; margin-top: 8px;
     }
 
-    /* ---- Voice Mode ---- */
-    .view.voice-mode.active { display: flex; }
-    #view-voice { padding: 16px; flex-direction: column; gap: 12px; }
+    /* ── How-to guide ── */
+    .how-to { margin-top: 20px; text-align: left; }
+    .how-to-title { font-size: 11px; font-weight: 600; color: #9ca3af;
+      text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .how-to-steps { padding-left: 18px; }
+    .how-to-steps li { font-size: 13px; color: #4b5563; line-height: 1.7; margin-bottom: 2px; }
+    .how-to-body { font-size: 13px; color: #4b5563; line-height: 1.5; }
+    .grade-guide { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .gg-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #374151; }
+    .gg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
-    .voice-indicator {
-      width: 64px; height: 64px; border-radius: 50%;
-      background: #1a73e8; margin: 0 auto;
-      position: relative; display: flex; align-items: center; justify-content: center;
-    }
-    .voice-indicator::before, .voice-indicator::after {
-      content: ''; position: absolute;
-      border-radius: 50%; border: 2px solid #1a73e8;
-      animation: pulse 1.5s ease-out infinite;
-    }
-    .voice-indicator::before { width: 80px; height: 80px; }
-    .voice-indicator::after  { width: 96px; height: 96px; animation-delay: 0.3s; }
-    @keyframes pulse {
-      0%   { transform: scale(1); opacity: 0.7; }
-      100% { transform: scale(1.2); opacity: 0; }
-    }
-    .voice-indicator.speaking { background: #34a853; }
-    .voice-indicator.speaking::before,
-    .voice-indicator.speaking::after { border-color: #34a853; }
-    .voice-indicator.thinking { background: #fbbc04; animation: none; }
-
-    .voice-status { text-align: center; font-size: 13px; color: #6b7280; }
-
-    .voice-result-card {
-      background: white; border-radius: 10px;
-      border: 1px solid #e5e7eb; padding: 12px;
-    }
-    .voice-result-card .vc-grade-badge {
-      display: inline-flex; align-items: center; gap: 6px;
-      font-size: 20px; font-weight: 700;
-    }
-    .voice-result-card .grade-A { color: #166534; }
-    .voice-result-card .grade-B { color: #854d0e; }
-    .voice-result-card .grade-C { color: #92400e; }
-    .voice-result-card .grade-D { color: #991b1b; }
-    .voice-result-card .species-name { font-size: 13px; color: #374151; margin-top: 4px; }
-    .voice-result-card .vc-score-bar-wrap { margin-top: 8px; }
-    .voice-result-card .vc-score-bar {
-      height: 6px; border-radius: 3px; background: #e5e7eb;
-    }
-    .voice-result-card .vc-score-bar-fill { height: 100%; border-radius: 3px; }
-    .alt-chip {
-      display: inline-block; font-size: 11px; padding: 2px 8px;
-      border-radius: 12px; background: #eff6ff; color: #1d4ed8;
-      margin-top: 6px; margin-right: 4px;
-    }
-    .alt-label { font-size: 11px; color: #6b7280; margin-top: 6px; }
-
-    .btn-stop {
-      width: 100%; padding: 10px; background: transparent;
-      border: 1px solid #d1d5db; border-radius: 8px;
-      color: #6b7280; font-size: 13px; cursor: pointer;
-    }
-    .btn-stop:hover { background: #f9fafb; }
-
-    .btn-text-link {
-      color: #1a73e8; background: none; border: none;
-      cursor: pointer; font-size: 13px;
-    }
-    .btn-text-link:hover { text-decoration: underline; }
-
-    /* Voice button on idle view — outline style */
-    #start-voice-btn {
-      border-color: #1a73e8; color: #1a73e8;
-    }
-    #start-voice-btn:hover { background: #eff6ff; }
+    /* ── Voice bar (inside view-result) ── */
+    .voice-bar { display: flex; align-items: center; gap: 8px;
+      background: #f0f9ff; border: 1px solid #bae6fd;
+      border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+    .vbar-dot { width: 8px; height: 8px; border-radius: 50%;
+      background: #3b82f6; flex-shrink: 0; }
+    .vbar-dot.speaking { background: #22c55e; }
+    .vbar-dot.thinking { background: #eab308; }
+    #voice-bar-status { flex: 1; font-size: 12px; color: #0369a1; }
+    .vbar-stop { font-size: 11px; color: #6b7280; background: none;
+      border: 1px solid #d1d5db; border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+    .vbar-stop:hover { background: #f9fafb; }
   </style>
 </head>
 <body>
@@ -338,9 +291,28 @@
   <div class="view" id="view-idle">
     <div class="icon">🐠</div>
     <h2>SeaSussed</h2>
-    <p>Navigate to a seafood product page, then click Analyze to get a sustainability score.</p>
+    <p>Instant sustainability scores for seafood — with live AI voice.</p>
     <button class="btn-primary" id="analyze-btn">Analyze This Page</button>
-    <button class="btn-secondary" id="start-voice-btn">🎤 Start Voice Mode</button>
+
+    <div class="how-to">
+      <div class="how-to-title">How it works</div>
+      <ol class="how-to-steps">
+        <li>Navigate to any online seafood product page</li>
+        <li>Click <strong>Analyze This Page</strong></li>
+        <li>Get an instant score — then our voice AI reacts</li>
+      </ol>
+
+      <div class="how-to-title" style="margin-top:16px;">Scores</div>
+      <div class="grade-guide">
+        <span class="gg-item"><span class="gg-dot" style="background:#22c55e"></span>A — Best Choice</span>
+        <span class="gg-item"><span class="gg-dot" style="background:#eab308"></span>B — Good Alternative</span>
+        <span class="gg-item"><span class="gg-dot" style="background:#f97316"></span>C — Use Caution</span>
+        <span class="gg-item"><span class="gg-dot" style="background:#ef4444"></span>D — Avoid</span>
+      </div>
+
+      <div class="how-to-title" style="margin-top:16px;">Voice AI</div>
+      <p class="how-to-body">After scoring, SeaSussed's live AI voice agent reacts to the result and answers any questions about the product.</p>
+    </div>
   </div>
 
   <!-- View: Loading -->
@@ -383,6 +355,13 @@
 
     <!-- Not right link -->
     <a class="not-right-link" id="not-right-link">Not right? Correct the details</a>
+
+    <!-- Voice bar -->
+    <div id="voice-bar" class="voice-bar" style="display:none">
+      <div id="voice-bar-indicator" class="vbar-dot"></div>
+      <span id="voice-bar-status">Connecting…</span>
+      <button id="voice-bar-stop" class="vbar-stop">End</button>
+    </div>
 
     <!-- Analyze again -->
     <button class="btn-secondary" id="analyze-again-btn">Analyze Again</button>
@@ -477,26 +456,6 @@
     <p id="error-message">Something went wrong. Please try again.</p>
     <button class="btn-primary" id="error-retry-btn">Try Again</button>
     <button class="btn-secondary" id="error-back-btn">Back</button>
-  </div>
-
-  <!-- View: Voice Mode -->
-  <div class="view voice-mode" id="view-voice">
-    <div class="voice-indicator" id="voice-indicator">🎤</div>
-    <div class="voice-status" id="voice-status">Connecting...</div>
-
-    <!-- Score card (hidden until first result) -->
-    <div class="voice-result-card" id="voice-result-card" style="display:none">
-      <div class="vc-grade-badge" id="vc-grade-badge">—</div>
-      <div class="species-name" id="vc-species">—</div>
-      <div class="vc-score-bar-wrap">
-        <div class="vc-score-bar">
-          <div class="vc-score-bar-fill" id="vc-score-fill" style="width:0%"></div>
-        </div>
-      </div>
-      <div id="vc-alternatives"></div>
-    </div>
-
-    <button class="btn-stop" id="stop-voice-btn">End voice session</button>
   </div>
 
   <!-- Cert definition popover (shared singleton) -->
