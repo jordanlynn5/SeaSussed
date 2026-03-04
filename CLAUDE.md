@@ -35,7 +35,7 @@ gcloud run deploy seasussed-backend \
   --allow-unauthenticated \
   --memory 1Gi \
   --min-instances 1 \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=seasussed-489008,GOOGLE_CLOUD_REGION=us-central1
+  --set-env-vars GOOGLE_CLOUD_PROJECT=seasussed-489008,GOOGLE_CLOUD_REGION=us-central1,GOOGLE_CLOUD_LOCATION=us-central1,GOOGLE_GENAI_USE_VERTEXAI=1
 
 # Chrome Extension
 # Load unpacked: chrome://extensions → Load unpacked → select extension/
