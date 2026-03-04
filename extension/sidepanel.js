@@ -98,7 +98,7 @@ function stopVoiceBar() {
 
 document.getElementById('voice-bar-stop')?.addEventListener('click', stopVoiceBar);
 
-async function startVoiceAfterResult(data) {
+async function connectVoice(data) {
   if (voiceClient !== null) return;
   voiceClient = new VoiceClient();
   voiceClient.onStatus = updateVoiceBar;
@@ -119,6 +119,35 @@ async function startVoiceAfterResult(data) {
     stopVoiceBar();
     voiceClient = null;
   }
+}
+
+async function startVoiceAfterResult(data) {
+  // getUserMedia requires a user gesture the first time mic permission is requested.
+  // Check permission state: if already granted, auto-connect; if prompt, show
+  // an "Enable Voice" button so the user's click supplies the gesture; if denied, skip.
+  let micState = 'prompt';
+  try {
+    const perm = await navigator.permissions.query({ name: 'microphone' });
+    micState = perm.state;
+  } catch (_) { /* Permissions API unavailable — assume prompt */ }
+
+  if (micState === 'denied') return; // mic blocked — skip silently
+
+  if (micState === 'granted') {
+    connectVoice(data);
+    return;
+  }
+
+  // 'prompt' — show Enable Voice button; user click provides the gesture
+  const bar = document.getElementById('voice-bar');
+  const status = document.getElementById('voice-bar-status');
+  if (!bar || !status) return;
+  bar.style.display = 'flex';
+  status.innerHTML = '<button id="voice-enable-btn" class="vbar-enable">Enable Voice</button>';
+  document.getElementById('voice-enable-btn')?.addEventListener('click', () => {
+    status.textContent = 'Connecting…';
+    connectVoice(data);
+  });
 }
 
 // ── Analyze ──
