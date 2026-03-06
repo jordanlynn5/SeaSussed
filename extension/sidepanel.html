@@ -255,6 +255,22 @@
     .gg-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #374151; }
     .gg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
+    /* ── Progressive loading placeholder ── */
+    .enriching-placeholder {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 0; color: #9ca3af; font-size: 13px;
+    }
+    .enriching-placeholder .spin-sm {
+      width: 14px; height: 14px; border: 2px solid #e5e7eb;
+      border-top-color: #3b82f6; border-radius: 50%;
+      animation: rotate 0.8s linear infinite; flex-shrink: 0;
+    }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in { animation: fadeSlideIn 0.3s ease-out; }
+
     /* ── Voice bar (fixed bottom, works over any view) ── */
     .voice-bar { position: fixed; bottom: 0; left: 0; right: 0;
       display: flex; align-items: center; gap: 8px;
@@ -323,7 +339,7 @@
   <!-- View: Loading -->
   <div class="view" id="view-loading">
     <div class="spinner-wrap"><div class="spin"></div></div>
-    <p>Analyzing seafood…</p>
+    <p id="loading-status">Analyzing seafood…</p>
   </div>
 
   <!-- View: Result -->

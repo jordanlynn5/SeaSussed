@@ -1,6 +1,7 @@
 """Tests for model construction and validation."""
 
 from models import (
+    AnalyzeRequest,
     AnalyzeResponse,
     PageAnalysis,
     PageProduct,
@@ -8,6 +9,25 @@ from models import (
     ScoreBreakdown,
     SustainabilityScore,
 )
+
+
+def test_analyze_request_new_fields_default_empty() -> None:
+    """AnalyzeRequest accepts page_text and product_images with defaults."""
+    req = AnalyzeRequest(screenshot="abc", url="https://example.com")
+    assert req.page_text == ""
+    assert req.product_images == []
+
+
+def test_analyze_request_with_page_text_and_images() -> None:
+    """AnalyzeRequest populates page_text and product_images."""
+    req = AnalyzeRequest(
+        screenshot="abc",
+        url="https://example.com",
+        page_text="TITLE: Wild Tuna\nDETAILS: Caught in Pacific Ocean",
+        product_images=["base64img1", "base64img2"],
+    )
+    assert req.page_text.startswith("TITLE:")
+    assert len(req.product_images) == 2
 
 
 def test_product_info_without_product_name() -> None:

@@ -38,6 +38,32 @@ def test_analyze_missing_screenshot_returns_400() -> None:
     assert response.status_code == 400
 
 
+def test_analyze_stream_missing_screenshot_returns_400() -> None:
+    """POST /analyze/stream with empty screenshot returns 400."""
+    response = client.post(
+        "/analyze/stream",
+        json={"screenshot": "", "url": "https://example.com"},
+    )
+    assert response.status_code == 400
+
+
+def test_analyze_accepts_page_text_and_product_images() -> None:
+    """POST /analyze accepts the new page_text and product_images fields."""
+    # This will still fail (400) because screenshot is empty, but validates
+    # that the new fields don't cause a schema validation error.
+    response = client.post(
+        "/analyze",
+        json={
+            "screenshot": "",
+            "url": "https://example.com",
+            "page_text": "TITLE: Wild Tuna",
+            "product_images": ["base64data"],
+        },
+    )
+    # 400 because screenshot is empty, not 422 (schema error)
+    assert response.status_code == 400
+
+
 def test_rate_limit_exceeded() -> None:
     """11th request from the same IP within 60s raises 429."""
     from main import _check_rate_limit, _request_times

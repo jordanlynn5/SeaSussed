@@ -12,7 +12,7 @@ from models import (
     ScoreFactor,
     SustainabilityScore,
 )
-from pipeline import analyze_page
+from pipeline import analyze_page, analyze_page_progressive
 
 _MOCK_SCORE = SustainabilityScore(
     score=72,
@@ -150,3 +150,56 @@ async def test_listing_filters_non_seafood() -> None:
     names = [p.product_name for p in result.products]
     assert "Chicken" not in names
     assert "Spaghetti" not in names
+
+
+# ── Progressive pipeline tests ──
+
+
+@pytest.mark.asyncio
+async def test_progressive_no_seafood_yields_single_complete() -> None:
+    """no_seafood emits a single 'complete' event."""
+    pa = PageAnalysis(page_type="no_seafood", products=[])
+    events = [e async for e in analyze_page_progressive(pa, [])]
+    assert len(events) == 1
+    assert events[0]["phase"] == "complete"
+    assert events[0]["page_type"] == "no_seafood"
+
+
+@pytest.mark.asyncio
+async def test_progressive_listing_yields_single_complete() -> None:
+    """product_listing emits a single 'complete' event with products."""
+    products = [
+        _make_product("salmon", name="Wild Salmon"),
+        _make_product("cod", name="Cod Fillet"),
+    ]
+    pa = PageAnalysis(page_type="product_listing", products=products)
+    events = [e async for e in analyze_page_progressive(pa, [])]
+    assert len(events) == 1
+    assert events[0]["phase"] == "complete"
+    assert events[0]["page_type"] == "product_listing"
+    assert len(events[0]["products"]) == 2
+
+
+@pytest.mark.asyncio
+@patch("pipeline.generate_content", return_value=("Good choice.", []))
+@patch("pipeline.score_alternatives", return_value=([], "Better alternatives"))
+async def test_progressive_single_product_yields_scored_then_complete(
+    _mock_alts: AsyncMock, _mock_explain: AsyncMock,
+) -> None:
+    """Single product emits 'scored' then 'complete'."""
+    product = _make_product("Atlantic cod", name="Fresh Cod")
+    pa = PageAnalysis(page_type="single_product", products=[product])
+    events = [e async for e in analyze_page_progressive(pa, [])]
+
+    assert len(events) == 2
+    # Phase 1: scored
+    assert events[0]["phase"] == "scored"
+    assert events[0]["product_info"]["species"] == "Atlantic cod"
+    assert "score" in events[0]
+    assert "grade" in events[0]
+    assert "breakdown" in events[0]
+    # Phase 2: complete
+    assert events[1]["phase"] == "complete"
+    assert events[1]["page_type"] == "single_product"
+    assert "result" in events[1]
+    assert events[1]["result"]["score"] == events[0]["score"]

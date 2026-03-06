@@ -8,6 +8,8 @@ class AnalyzeRequest(BaseModel):
     url: str  # current page URL
     page_title: str = ""
     related_products: list[str] = []  # product titles scraped from DOM
+    page_text: str = ""  # full DOM text (description, details, ingredients)
+    product_images: list[str] = []  # base64-encoded gallery images (front, back, label)
 
 
 class ScoreRequest(BaseModel):

@@ -185,51 +185,168 @@ async function triggerAnalyze() {
   if (!tab?.id) return;
 
   showView('view-loading');
+  setLoadingStatus('Capturing page data…');
 
-  chrome.runtime.sendMessage(
-    { type: 'ANALYZE_PAGE', tabId: tab.id, url: tab.url },
-    (result) => {
-      if (chrome.runtime.lastError) {
-        showError(chrome.runtime.lastError?.message || 'Unknown error');
-        return;
-      }
-      if (result?.error === 'duplicate') {
-        showError("You've already scored this product. Navigate to a different product for a new score.");
-        return;
-      }
-      if (result?.error === 'cooldown') {
-        startCooldownUI(result.secondsRemaining);
-        return;
-      }
-      if (result?.error) {
-        showError(result.error);
-        return;
-      }
-
-      const pageType = result.page_type;
-
-      if (pageType === 'no_seafood') {
-        showView('view-non-seafood');
-      } else if (pageType === 'product_listing' && result.products?.length > 0) {
-        renderProductList(result.products);
-      } else if (result.result) {
-        if (!result.result.product_info?.is_seafood) {
-          showView('view-non-seafood');
-          return;
+  try {
+    // Step 1: Capture screenshot + gallery images + DOM text via background.js
+    const pageData = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { type: 'CAPTURE_PAGE_DATA', tabId: tab.id, url: tab.url },
+        (result) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else if (result?.error) reject(new Error(result.error));
+          else resolve(result);
         }
-        currentResult = result.result;
-        renderResult(result.result);
-      } else {
-        // Fallback for old backend response shape (no page_type)
-        if (!result.product_info?.is_seafood) {
-          showView('view-non-seafood');
-        } else {
-          currentResult = result;
-          renderResult(result);
-        }
+      );
+    });
+
+    setLoadingStatus('Identifying product…');
+
+    // Step 2: Stream results from backend via SSE
+    const response = await fetch(`${BACKEND_URL}/analyze/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        screenshot: pageData.screenshot,
+        url: pageData.url,
+        page_title: pageData.pageTitle,
+        page_text: pageData.pageText,
+        product_images: pageData.productImages,
+        related_products: pageData.relatedProducts,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Backend error ${response.status}: ${text.substring(0, 120)}`);
+    }
+
+    // Read SSE stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = JSON.parse(line.slice(6));
+        handleSSEEvent(data, pageData);
       }
     }
-  );
+  } catch (err) {
+    showError(err.message);
+  }
+}
+
+function setLoadingStatus(text) {
+  const el = document.getElementById('loading-status');
+  if (el) el.textContent = text;
+}
+
+function handleSSEEvent(data, pageData) {
+  if (data.phase === 'analyzing') {
+    setLoadingStatus('Analyzing all images…');
+    return;
+  }
+
+  if (data.phase === 'scored') {
+    // Progressive phase 1: show product info + score immediately
+    renderScorePhase(data);
+    return;
+  }
+
+  if (data.phase === 'complete') {
+    if (data.page_type === 'no_seafood') {
+      showView('view-non-seafood');
+    } else if (data.page_type === 'product_listing' && data.products?.length > 0) {
+      renderProductList(data.products);
+    } else if (data.result) {
+      if (!data.result.product_info?.is_seafood) {
+        showView('view-non-seafood');
+        return;
+      }
+      currentResult = data.result;
+      renderResult(data.result);
+    }
+  }
+}
+
+// ── Progressive Phase 1: Score + product info (before alternatives/explanation) ──
+function renderScorePhase(data) {
+  const { score, grade, breakdown, product_info } = data;
+  const color = GRADE_COLORS[grade];
+
+  // Grade badge
+  document.getElementById('grade-circle').textContent = grade;
+  document.getElementById('grade-circle').style.background = color;
+  document.getElementById('grade-emoji-label').textContent = GRADE_LABELS[grade];
+  document.getElementById('grade-score-text').textContent = `${score}/100`;
+
+  // Extraction tags
+  const tagsEl = document.getElementById('extraction-tags');
+  tagsEl.innerHTML = '';
+  if (product_info.species)
+    tagsEl.innerHTML += `<span class="tag">${product_info.species}</span>`;
+  if (product_info.wild_or_farmed !== 'unknown')
+    tagsEl.innerHTML += `<span class="tag">${product_info.wild_or_farmed}</span>`;
+  if (product_info.origin_region)
+    tagsEl.innerHTML += `<span class="tag">${product_info.origin_region}</span>`;
+  if (product_info.fishing_method)
+    tagsEl.innerHTML += `<span class="tag">${product_info.fishing_method}</span>`;
+  product_info.certifications?.forEach(c =>
+    tagsEl.innerHTML += `<span class="tag cert" data-cert="${c}">${c}</span>`);
+
+  tagsEl.querySelectorAll('.tag.cert').forEach(tag => {
+    tag.addEventListener('click', (e) => showCertPopover(tag.dataset.cert, e));
+  });
+
+  // Placeholder explanation while we wait for Phase 2
+  document.getElementById('explanation-text').textContent = '';
+
+  // Simple breakdown bars (will be replaced by expandable rows in Phase 2)
+  const practicesLabel = product_info.wild_or_farmed === 'farmed'
+    ? 'Aquaculture Practices' : 'Fishing Practices';
+  const rows = [
+    ['Biological Status', breakdown.biological, BREAKDOWN_MAX.biological],
+    [practicesLabel,      breakdown.practices,  BREAKDOWN_MAX.practices],
+    ['Management',        breakdown.management, BREAKDOWN_MAX.management],
+    ['Ecological',        breakdown.ecological, BREAKDOWN_MAX.ecological],
+  ];
+  document.getElementById('breakdown-rows').innerHTML = rows.map(([label, val, max]) => {
+    const pct = Math.round((val / max) * 100);
+    const barColor = pct >= 70 ? '#22c55e' : pct >= 45 ? '#eab308' : '#ef4444';
+    return `
+      <div class="score-row">
+        <span class="score-label">${label}</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div class="score-bar-wrap">
+            <div class="score-bar" style="width:${pct}%; background:${barColor};"></div>
+          </div>
+          <span class="score-val">${Math.round(val)}/${max}</span>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Show placeholder for alternatives while Phase 2 loads
+  const altsCard = document.getElementById('alternatives-card');
+  altsCard.style.display = 'block';
+  document.getElementById('alternatives-title').textContent = 'Finding alternatives…';
+  document.getElementById('alternatives-list').innerHTML =
+    '<div class="enriching-placeholder"><div class="spin-sm"></div>Loading alternatives &amp; explanation…</div>';
+  document.getElementById('category-page-tip').style.display = 'none';
+
+  // Hide not-right link until we have the full result
+  document.getElementById('not-right-link').style.display = 'none';
+
+  showView('view-result');
 }
 
 document.getElementById('analyze-btn')?.addEventListener('click', triggerAnalyze);
@@ -415,6 +532,9 @@ function renderResult(data) {
         </div>`;
     }).join('');
   }
+
+  // Show not-right link (may have been hidden during progressive Phase 1)
+  document.getElementById('not-right-link').style.display = '';
 
   // Alternatives
   const altsCard  = document.getElementById('alternatives-card');
