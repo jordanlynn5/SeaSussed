@@ -12,47 +12,80 @@ class VoiceClient {
     this.micStream = null;
     this.workletNode = null;
     this.nextPlayTime = 0;
+    this._receivedFirstAudio = false;
     this.onStatus = () => {};
     this.onScoreResult = () => {};
     this.onError = () => {};
+    this.onAudioActivity = () => {}; // fires each time a mic chunk is sent
   }
 
   // ── Public API ──────────────────────────────────────────
 
   async start(preAcquiredStream = null) {
     // 1. Get microphone (use pre-acquired stream if provided to avoid re-requesting permission)
+    console.log('[SeaSussed] VoiceClient.start() — acquiring mic…');
     this.micStream = preAcquiredStream ?? await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true },
     });
+    console.log('[SeaSussed] Mic acquired, tracks:', this.micStream.getTracks().map(t => t.readyState));
 
-    // 2. Create AudioContext and resume it (may be suspended when called outside a direct user gesture)
-    this.audioContext = new AudioContext({ sampleRate: 16000 });
+    // 2. Create AudioContext for playback (24kHz to match Gemini output)
+    this.audioContext = new AudioContext({ sampleRate: 24000 });
     if (this.audioContext.state === 'suspended') {
+      console.log('[SeaSussed] AudioContext suspended, resuming…');
       await this.audioContext.resume();
     }
+    console.log('[SeaSussed] AudioContext state:', this.audioContext.state, 'sampleRate:', this.audioContext.sampleRate);
     this.nextPlayTime = this.audioContext.currentTime;
 
-    // 3. Load AudioWorklet
-    await this.audioContext.audioWorklet.addModule(
+    // 3. Separate AudioContext for mic capture at 16kHz
+    this._micContext = new AudioContext({ sampleRate: 16000 });
+    if (this._micContext.state === 'suspended') {
+      await this._micContext.resume();
+    }
+
+    // 4. Load AudioWorklet on the mic context
+    await this._micContext.audioWorklet.addModule(
       chrome.runtime.getURL('audio-worklet-processor.js')
     );
+    console.log('[SeaSussed] AudioWorklet loaded');
 
-    // 4. Open WebSocket to backend
+    // 5. Open WebSocket to backend
     const wsUrl = BACKEND_URL
       .replace('https://', 'wss://')
       .replace('http://', 'ws://');
+    console.log('[SeaSussed] Opening WebSocket to', wsUrl + '/voice');
     this.ws = new WebSocket(wsUrl + '/voice');
-    this.ws.onmessage = (event) => this._handleMessage(JSON.parse(event.data));
-    this.ws.onclose = () => this.onStatus('ended');
-    this.ws.onerror = () => this.onError('Connection error');
     await this._waitForOpen();
+    console.log('[SeaSussed] WebSocket connected');
 
-    // 5. Wire mic → AudioWorklet → WebSocket
-    const source = this.audioContext.createMediaStreamSource(this.micStream);
-    this.workletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');
+    // 6. Set up message and lifecycle handlers (AFTER _waitForOpen so they aren't overwritten)
+    this.ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        this._handleMessage(msg).catch(err => {
+          console.error('[SeaSussed] Error in _handleMessage:', err);
+        });
+      } catch (parseErr) {
+        console.error('[SeaSussed] Failed to parse WS message:', parseErr);
+      }
+    };
+    this.ws.onclose = (event) => {
+      console.warn('[SeaSussed] WebSocket closed — code:', event.code, 'reason:', event.reason || '(none)');
+      this.onStatus('ended');
+    };
+    this.ws.onerror = (event) => {
+      console.error('[SeaSussed] WebSocket error:', event);
+      this.onError('Connection error');
+    };
+
+    // 7. Wire mic → AudioWorklet → WebSocket
+    const source = this._micContext.createMediaStreamSource(this.micStream);
+    this.workletNode = new AudioWorkletNode(this._micContext, 'pcm-processor');
     this.workletNode.port.onmessage = (e) => this._sendAudioChunk(e.data);
     source.connect(this.workletNode);
     // workletNode is NOT connected to destination — prevents mic echo
+    console.log('[SeaSussed] Mic wired to worklet, audio flowing');
   }
 
   sendResultContext(ctx) {
@@ -62,7 +95,9 @@ class VoiceClient {
 
   stop() {
     if (this.ws) {
-      this.ws.send(JSON.stringify({ type: 'stop' }));
+      if (this.ws.readyState === WebSocket.OPEN) {
+        try { this.ws.send(JSON.stringify({ type: 'stop' })); } catch (_) {}
+      }
       this.ws.close();
       this.ws = null;
     }
@@ -73,6 +108,10 @@ class VoiceClient {
     if (this.micStream) {
       this.micStream.getTracks().forEach(t => t.stop());
       this.micStream = null;
+    }
+    if (this._micContext) {
+      this._micContext.close();
+      this._micContext = null;
     }
     if (this.audioContext) {
       this.audioContext.close();
@@ -87,14 +126,25 @@ class VoiceClient {
       return;
     }
     const uint8 = new Uint8Array(arrayBuffer);
-    const b64 = btoa(String.fromCharCode(...uint8));
+    // Build base64 in chunks to avoid stack overflow with spread operator
+    let binary = '';
+    for (let i = 0; i < uint8.length; i++) {
+      binary += String.fromCharCode(uint8[i]);
+    }
+    const b64 = btoa(binary);
     this.ws.send(JSON.stringify({ type: 'audio', data: b64 }));
+    this.onAudioActivity();
   }
 
   async _handleMessage(msg) {
     switch (msg.type) {
       case 'audio':
-        await this._playAudioChunk(msg.data);
+        if (!this._receivedFirstAudio) {
+          this._receivedFirstAudio = true;
+          console.log('[SeaSussed] First audio chunk from server');
+          this.onStatus('speaking');
+        }
+        this._playAudioChunk(msg.data);
         break;
       case 'request_screenshot':
         await this._captureAndSendScreenshot();
@@ -103,9 +153,12 @@ class VoiceClient {
         this.onScoreResult(msg.score);
         break;
       case 'status':
-        this.onStatus(msg.state);
+        console.log('[SeaSussed] Status from server:', msg.state);
+        if (msg.state === 'listening') this._receivedFirstAudio = false;
+        if (msg.state !== 'connecting') this.onStatus(msg.state);
         break;
       case 'error':
+        console.error('[SeaSussed] Error from server:', msg.message);
         this.onError(msg.message);
         break;
       case 'ping':
@@ -113,36 +166,44 @@ class VoiceClient {
     }
   }
 
-  async _playAudioChunk(b64) {
-    if (!this.audioContext) {
+  _playAudioChunk(b64) {
+    if (!this.audioContext || this.audioContext.state === 'closed') {
       return;
     }
 
-    // Decode base64 → bytes
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
+    try {
+      // Decode base64 -> bytes
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+
+      // Ensure even byte length for Int16 conversion
+      const usableLength = bytes.length & ~1;
+      if (usableLength === 0) return;
+
+      // Interpret as Int16 (24kHz, 16-bit PCM) -> Float32
+      const int16 = new Int16Array(bytes.buffer, 0, usableLength / 2);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768.0;
+      }
+
+      // Create AudioBuffer (24kHz, mono) and schedule gapless playback
+      const buffer = this.audioContext.createBuffer(1, float32.length, 24000);
+      buffer.getChannelData(0).set(float32);
+
+      const source = this.audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.audioContext.destination);
+
+      const startTime = Math.max(this.audioContext.currentTime, this.nextPlayTime);
+      source.start(startTime);
+      this.nextPlayTime = startTime + buffer.duration;
+    } catch (err) {
+      console.warn('[SeaSussed] Audio playback error (non-fatal):', err.message);
     }
-
-    // Interpret as Int16 (24kHz, 16-bit PCM) → Float32
-    const int16 = new Int16Array(bytes.buffer);
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) {
-      float32[i] = int16[i] / 32768.0;
-    }
-
-    // Create AudioBuffer (24kHz, mono) and schedule gapless playback
-    const buffer = this.audioContext.createBuffer(1, float32.length, 24000);
-    buffer.getChannelData(0).set(float32);
-
-    const source = this.audioContext.createBufferSource();
-    source.buffer = buffer;
-    source.connect(this.audioContext.destination);
-
-    const startTime = Math.max(this.audioContext.currentTime, this.nextPlayTime);
-    source.start(startTime);
-    this.nextPlayTime = startTime + buffer.duration;
   }
 
   async _captureAndSendScreenshot() {
@@ -182,9 +243,25 @@ class VoiceClient {
 
   _waitForOpen() {
     return new Promise((resolve, reject) => {
-      this.ws.onopen = resolve;
-      this.ws.onerror = reject;
-      setTimeout(() => reject(new Error('WebSocket open timed out')), 5000);
+      const cleanup = () => {
+        clearTimeout(timer);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('WebSocket open timed out'));
+      }, 5000);
+      this.ws.onopen = () => {
+        cleanup();
+        resolve();
+      };
+      this.ws.onerror = (event) => {
+        cleanup();
+        reject(new Error('WebSocket connection failed'));
+      };
+      this.ws.onclose = (event) => {
+        cleanup();
+        reject(new Error(`WebSocket closed during connect: code=${event.code}`));
+      };
     });
   }
 }

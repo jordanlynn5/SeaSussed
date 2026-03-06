@@ -54,6 +54,16 @@ const CERT_DEFINITIONS = {
 
 let currentResult = null;
 let voiceClient = null;
+let pendingVoiceData = null; // held while mic-permission popup is open
+
+// Receive grant from mic-permission.html popup and start voice
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'MIC_PERMISSION_GRANTED' && pendingVoiceData) {
+    const { data } = pendingVoiceData;
+    pendingVoiceData = null;
+    connectVoice(data);
+  }
+});
 
 // ── View management ──
 function showView(id) {
@@ -98,7 +108,7 @@ function stopVoiceBar() {
 
 document.getElementById('voice-bar-stop')?.addEventListener('click', stopVoiceBar);
 
-async function connectVoice(data, listCount = 0, preStream = null) {
+async function connectVoice(data, preStream = null) {
   if (voiceClient !== null) {
     if (preStream) preStream.getTracks().forEach(t => t.stop());
     return;
@@ -107,6 +117,13 @@ async function connectVoice(data, listCount = 0, preStream = null) {
   voiceClient.onStatus = updateVoiceBar;
   voiceClient.onScoreResult = () => {};
   voiceClient.onError = () => stopVoiceBar();
+  voiceClient.onAudioActivity = () => {
+    const dot = document.getElementById('voice-bar-indicator');
+    if (!dot) return;
+    dot.classList.add('mic-active');
+    clearTimeout(dot._activityTimer);
+    dot._activityTimer = setTimeout(() => dot.classList.remove('mic-active'), 150);
+  };
   showVoiceBar('Connecting…');
   try {
     await voiceClient.start(preStream);
@@ -116,7 +133,6 @@ async function connectVoice(data, listCount = 0, preStream = null) {
       grade: data.grade,
       species: data.product_info?.species ?? null,
       wild_or_farmed: data.product_info?.wild_or_farmed ?? 'unknown',
-      list_count: listCount,
     });
   } catch (err) {
     console.warn('[SeaSussed] Voice start failed:', err.message);
@@ -125,10 +141,12 @@ async function connectVoice(data, listCount = 0, preStream = null) {
   }
 }
 
-async function startVoiceAfterResult(data, listCount = 0) {
-  // getUserMedia requires a user gesture the first time mic permission is requested.
-  // Check permission state: if already granted, auto-connect; if prompt, show
-  // an "Enable Voice" button so the user's click supplies the gesture; if denied, skip.
+async function startVoiceAfterResult(data) {
+  // Check current mic permission state.
+  // If already granted, connect directly.
+  // If prompt/unknown, open a dedicated popup page — getUserMedia from the popup's
+  // button-click handler is the most reliable way to trigger Chrome's permission dialog
+  // (side panel pages don't reliably surface the prompt in all Chrome versions).
   let micState = 'prompt';
   try {
     const perm = await navigator.permissions.query({ name: 'microphone' });
@@ -138,35 +156,26 @@ async function startVoiceAfterResult(data, listCount = 0) {
   if (micState === 'denied') return; // mic blocked — skip silently
 
   if (micState === 'granted') {
-    connectVoice(data, listCount);
+    connectVoice(data);
     return;
   }
 
-  // 'prompt' — getUserMedia must be the first await in the gesture handler
+  // 'prompt' — open mic-permission.html popup; it sends MIC_PERMISSION_GRANTED on success
+  pendingVoiceData = { data };
   const bar = document.getElementById('voice-bar');
   const status = document.getElementById('voice-bar-status');
-  if (!bar || !status) return;
-  bar.style.display = 'flex';
-  function attachEnableBtn() {
+  if (bar) bar.style.display = 'flex';
+  if (status) {
     status.innerHTML = '<button id="voice-enable-btn" class="vbar-enable">Enable Voice</button>';
-    document.getElementById('voice-enable-btn')?.addEventListener('click', async () => {
-      document.getElementById('voice-enable-btn')?.remove();
-      status.textContent = 'Requesting mic…';
-      let stream;
-      try {
-        // getUserMedia must be the first await — preserves Chrome's user activation
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true },
-        });
-      } catch (e) {
-        console.warn('[SeaSussed] Mic permission:', e.name, e.message);
-        attachEnableBtn(); // re-show button on failure
-        return;
-      }
-      connectVoice(data, listCount, stream);
+    document.getElementById('voice-enable-btn')?.addEventListener('click', () => {
+      // Open as a tab — Chrome reliably shows the getUserMedia permission prompt
+      // for extension pages opened as tabs; popup windows can fail with NotFoundError.
+      chrome.tabs.create({
+        url: chrome.runtime.getURL('mic-permission.html'),
+        active: true,
+      });
     });
   }
-  attachEnableBtn();
 }
 
 // ── Analyze ──
@@ -305,7 +314,7 @@ function renderProductList(products) {
       score: best.score,
       grade: best.grade,
       product_info: { species: best.species ?? null, wild_or_farmed: best.wild_or_farmed ?? 'unknown' },
-    }, products.length);
+    });
   }
 }
 

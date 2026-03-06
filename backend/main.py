@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from time import time
 
@@ -7,6 +8,8 @@ from agents.screen_analyzer import analyze_screenshot
 from models import AnalyzeRequest, AnalyzeResponse, ScoreRequest, SustainabilityScore
 from pipeline import analyze_page, run_scoring_pipeline
 from voice_session import VoiceSession
+
+logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s: %(message)s")
 
 app = FastAPI(title="SeaSussed Backend", version="0.1.0")
 
@@ -54,4 +57,10 @@ async def score_endpoint(request: ScoreRequest) -> SustainabilityScore:
 async def voice_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
     session = VoiceSession(websocket)
-    await session.run()
+    try:
+        await session.run()
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass

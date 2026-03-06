@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SeaSussed — Enable Voice</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px; color: #1f2937; background: #f9fafb;
+      padding: 28px 24px; width: 300px; text-align: center;
+    }
+    .icon { font-size: 36px; margin-bottom: 14px; }
+    h2 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    p { color: #6b7280; font-size: 13px; line-height: 1.55; margin-bottom: 20px; }
+    .btn {
+      width: 100%; padding: 11px; background: #3b82f6; color: white;
+      border: none; border-radius: 8px; font-size: 14px; font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { background: #93c5fd; cursor: default; }
+    .error {
+      color: #b91c1c; font-size: 12px; margin-top: 14px;
+      background: #fef2f2; border: 1px solid #fecaca;
+      border-radius: 6px; padding: 8px 10px; line-height: 1.5;
+    }
+    .note { color: #9ca3af; font-size: 11px; margin-top: 14px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="icon">🎤</div>
+  <h2>Enable Voice AI</h2>
+  <p>SeaSussed's voice AI answers questions about seafood sustainability. Click below to allow microphone access.</p>
+  <button class="btn" id="allow-btn">Allow Microphone</button>
+  <div class="error" id="error-msg" style="display:none"></div>
+  <p class="note">On Mac, Chrome also needs microphone access in <strong>System Settings → Privacy &amp; Security → Microphone</strong>.</p>
+  <script src="mic-permission.js"></script>
+</body>
+</html>

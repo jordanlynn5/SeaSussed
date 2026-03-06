@@ -261,9 +261,10 @@
       background: #f0f9ff; border-top: 1px solid #bae6fd;
       padding: 10px 16px; z-index: 100; }
     .vbar-dot { width: 8px; height: 8px; border-radius: 50%;
-      background: #3b82f6; flex-shrink: 0; }
+      background: #3b82f6; flex-shrink: 0; transition: transform 0.1s; }
     .vbar-dot.speaking { background: #22c55e; }
     .vbar-dot.thinking { background: #eab308; }
+    .vbar-dot.mic-active { transform: scale(1.6); background: #22c55e; }
     #voice-bar-status { flex: 1; font-size: 12px; color: #0369a1; }
     .vbar-stop { font-size: 11px; color: #6b7280; background: none;
       border: 1px solid #d1d5db; border-radius: 6px; padding: 2px 8px; cursor: pointer; }

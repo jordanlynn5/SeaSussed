@@ -84,6 +84,7 @@ class MockSession:
         self.responses = responses or []
         self.send_realtime_input = AsyncMock()
         self.send_tool_response = AsyncMock()
+        self.send_client_content = AsyncMock()
         self._block = asyncio.Event()
 
     async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
@@ -120,6 +121,9 @@ def test_voice_websocket_connects_and_stops(mock_get_client: MagicMock) -> None:
     with TestClient(app) as client:
         with client.websocket_connect("/voice") as ws:
             msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "connecting"}
+
+            msg = ws.receive_json()
             assert msg == {"type": "status", "state": "listening"}
 
             ws.send_json({"type": "stop"})
@@ -146,19 +150,23 @@ def test_voice_analyze_tool_call(
 
     with TestClient(app) as client:
         with client.websocket_connect("/voice") as ws:
-            # 1. listening status
+            # 1. connecting status
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "connecting"}
+
+            # 2. listening status
             msg = ws.receive_json()
             assert msg == {"type": "status", "state": "listening"}
 
-            # 2. thinking status (from tool_call handler)
+            # 3. thinking status (from tool_call handler)
             msg = ws.receive_json()
             assert msg == {"type": "status", "state": "thinking"}
 
-            # 3. request_screenshot
+            # 4. request_screenshot
             msg = ws.receive_json()
             assert msg["type"] == "request_screenshot"
 
-            # 4. Send screenshot data
+            # 5. Send screenshot data
             ws.send_json({
                 "type": "screenshot",
                 "data": MOCK_BASE64_PNG,
@@ -167,13 +175,13 @@ def test_voice_analyze_tool_call(
                 "related_products": ["Pacific Salmon", "Alaskan Halibut"],
             })
 
-            # 5. Receive score_result
+            # 6. Receive score_result
             msg = ws.receive_json()
             assert msg["type"] == "score_result"
             assert msg["score"]["grade"] == "B"
             assert msg["score"]["score"] == 72
 
-            # 6. speaking status
+            # 7. speaking status
             msg = ws.receive_json()
             assert msg == {"type": "status", "state": "speaking"}
 
@@ -197,19 +205,23 @@ def test_voice_screenshot_timeout(mock_get_client: MagicMock) -> None:
 
     with TestClient(app) as client:
         with client.websocket_connect("/voice") as ws:
-            # 1. listening
+            # 1. connecting
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "connecting"}
+
+            # 2. listening
             msg = ws.receive_json()
             assert msg["type"] == "status"
 
-            # 2. thinking
+            # 3. thinking
             msg = ws.receive_json()
             assert msg["type"] == "status"
 
-            # 3. request_screenshot — but we never respond
+            # 4. request_screenshot — but we never respond
             msg = ws.receive_json()
             assert msg["type"] == "request_screenshot"
 
-            # 4. After timeout, Gemini gets error response and sends speaking status
+            # 5. After timeout, Gemini gets error response and sends speaking status
             # The tool_response is sent with error, so we should get "speaking"
             msg = ws.receive_json()
             assert msg == {"type": "status", "state": "speaking"}
@@ -229,6 +241,10 @@ def test_voice_session_cleanup_on_disconnect(mock_get_client: MagicMock) -> None
     # Client connects then disconnects — server should clean up without exception
     with TestClient(app) as client:
         with client.websocket_connect("/voice") as ws:
+            # connecting
             msg = ws.receive_json()
-            assert msg["type"] == "status"
+            assert msg == {"type": "status", "state": "connecting"}
+            # listening
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "listening"}
             ws.close()
