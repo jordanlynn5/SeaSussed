@@ -12,6 +12,7 @@ from agents.screen_analyzer import analyze_screenshot
 from gemini_client import get_genai_client
 from models import ProductInfo
 from pipeline import run_scoring_pipeline
+from scoring import compute_score
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +28,29 @@ ANALYZE_CURRENT_PRODUCT_TOOL = types.FunctionDeclaration(
         "Returns a sustainability score with grade, explanation, and alternatives."
     ),
     parameters=types.Schema(type=types.Type.OBJECT, properties={}, required=[]),
+)
+
+SEARCH_STORE_TOOL = types.FunctionDeclaration(
+    name="search_store",
+    description=(
+        "Search the grocery store website the user is currently browsing. "
+        "Use this to find sustainable seafood alternatives that are actually "
+        "available for purchase on the site. Returns a list of seafood products "
+        "found in the search results with their sustainability scores."
+    ),
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "query": types.Schema(
+                type=types.Type.STRING,
+                description=(
+                    "Search query for the grocery store, e.g. 'wild salmon', "
+                    "'msc certified shrimp', 'Alaska pollock'"
+                ),
+            ),
+        },
+        required=["query"],
+    ),
 )
 
 VOICE_SYSTEM_PROMPT = """\
@@ -49,17 +73,40 @@ Grade-appropriate openers:
 - Grade C: Gentle. "So, this one's a mixed bag."
 - Grade D: Direct but friendly. "Heads up on this one."
 
-WHEN TO ANALYZE A PRODUCT:
-Call analyze_current_product() whenever the user mentions a seafood product in a \
-shopping context:
-- Species mentioned ("this salmon", "the cod", "these shrimp", "that halibut")
-- Direct requests ("score this", "is this sustainable?", "what do you think?", \
-"check this out")
-- Comparative references ("what about this one?", "how about this instead?")
-- Casual pointing ("look at this", "what's this fish like?")
+MULTI-PRODUCT GREETING (on "[greet-multi ...]" messages):
+You will receive a summary of ALL seafood products scored on the page. \
+Respond in 2–3 SHORT sentences:
+1. A brief summary of what you found — e.g. "I've looked at all 5 seafood items \
+on this page."
+2. Highlight the best and worst options by name.
+3. Ask which product they'd like to know more about.
+Do NOT list every product — the scores are already visible in the panel.
 
-Do NOT call analyze_current_product() for general seafood questions \
-(e.g., "is farmed salmon ever good?").
+WHEN YOU ALREADY HAVE PRODUCT DATA:
+If the greeting included a list of scored products, you already know their scores. \
+When the user asks about a specific product by name, answer from that data — \
+do NOT call analyze_current_product(). Only call the tool when the user has \
+navigated to a NEW page or asks you to re-analyze.
+
+WHEN TO ANALYZE A PRODUCT:
+Call analyze_current_product() ONLY when:
+- The user has navigated to a new page and asks you to check it
+- The user explicitly says "analyze this page" or "score this"
+- You do NOT already have score data for the product they're asking about
+
+Do NOT call analyze_current_product() for:
+- Products you already have scores for (answer from context instead)
+- General seafood questions (e.g., "is farmed salmon ever good?")
+
+SEARCHING THE STORE:
+Call search_store(query) to find sustainable alternatives on the grocery website \
+the user is browsing. Use this when:
+- You want to suggest a better alternative and need to check what's available
+- The user asks "do they have any wild salmon?" or "what else do they have?"
+- A product scored poorly and you want to find a better option on the same site
+Keep queries short and specific: "wild Alaska salmon", "MSC shrimp", "cod fillet".
+When you get results back, recommend the best-scoring options by name so the user \
+can search for them on the site.
 
 AFTER RECEIVING A SCORE (from tool call) — respond conversationally:
 - Grade A: Warm and affirming. One-sentence reason. "Definitely grab it."
@@ -79,6 +126,13 @@ naturally and helpfully.
 Gently redirect off-topic conversation: "I'm your seafood expert today — happy to \
 check out anything on the page!"
 
+INTERRUPTION RECOVERY:
+If you get interrupted mid-sentence but the user doesn't actually say anything \
+(silence, background noise, or unclear audio), acknowledge it briefly and continue \
+where you left off. For example: "Oh sorry, thought you wanted to jump in! \
+Anyway, as I was saying…" Keep the recovery natural and quick — don't restart \
+your whole response, just pick up from roughly where you were cut off.
+
 HONESTY RULE (hard):
 Never claim certainty about information not visible on the page. If species, origin, \
 or fishing method wasn't shown, acknowledge it: "They don't list where it's from, \
@@ -88,7 +142,9 @@ so I'm working with limited info here."
 LIVE_CONFIG = types.LiveConnectConfig(
     response_modalities=[types.Modality.AUDIO],
     system_instruction=VOICE_SYSTEM_PROMPT,
-    tools=[types.Tool(function_declarations=[ANALYZE_CURRENT_PRODUCT_TOOL])],
+    tools=[types.Tool(function_declarations=[
+        ANALYZE_CURRENT_PRODUCT_TOOL, SEARCH_STORE_TOOL,
+    ])],
 )
 
 
@@ -102,6 +158,8 @@ class VoiceSession:
         self.ws = ws
         self.screenshot_event = asyncio.Event()
         self.screenshot_data: dict[str, Any] | None = None
+        self.search_event = asyncio.Event()
+        self.search_data: dict[str, Any] | None = None
         self.greeting_event = asyncio.Event()
         self.greeting_context: dict[str, Any] | None = None
 
@@ -166,7 +224,26 @@ class VoiceSession:
             pass  # No context arrived — send a generic greeting
 
         ctx = self.greeting_context
-        if ctx:
+        all_products = ctx.get("all_products") if ctx else None
+
+        if all_products and len(all_products) > 1:
+            # Multi-product page — send all scored products as context
+            lines = []
+            for p in all_products:
+                name = p.get("product_name") or p.get("species") or "unknown"
+                lines.append(
+                    f"- {name}: Grade {p.get('grade')}, "
+                    f"Score {p.get('score')}/100 "
+                    f"({p.get('wild_or_farmed', 'unknown')})"
+                )
+            product_list = "\n".join(lines)
+            text = (
+                f"[greet-multi] The user just scored {len(all_products)} "
+                f"seafood products on this page:\n{product_list}\n"
+                f"Greet them and give a brief overview of the best and "
+                f"worst options."
+            )
+        elif ctx:
             grade = ctx.get("grade", "")
             score = ctx.get("score", 0)
             species = ctx.get("species") or "this product"
@@ -212,6 +289,9 @@ class VoiceSession:
             elif msg_type == "screenshot":
                 self.screenshot_data = msg
                 self.screenshot_event.set()
+            elif msg_type == "search_results":
+                self.search_data = msg
+                self.search_event.set()
             elif msg_type == "result_context":
                 self.greeting_context = msg
                 self.greeting_event.set()
@@ -246,13 +326,20 @@ class VoiceSession:
                                 result = (
                                     await self._handle_analyze_current_product()
                                 )
-                                tool_responses.append(
-                                    types.FunctionResponse(
-                                        id=fc.id,
-                                        name=fc.name,
-                                        response=result,
-                                    )
+                            elif fc.name == "search_store":
+                                query = (fc.args or {}).get("query", "")
+                                result = await self._handle_search_store(
+                                    query
                                 )
+                            else:
+                                result = {"error": f"Unknown tool: {fc.name}"}
+                            tool_responses.append(
+                                types.FunctionResponse(
+                                    id=fc.id,
+                                    name=fc.name,
+                                    response=result,
+                                )
+                            )
                         if tool_responses:
                             await session.send_tool_response(
                                 function_responses=tool_responses
@@ -342,6 +429,49 @@ class VoiceSession:
             ],
             "not_seafood": not product_info.is_seafood,
         }
+
+    async def _handle_search_store(self, query: str) -> dict[str, Any]:
+        """Search the grocery store and return scored products."""
+        log.info("Searching store for: %s", query)
+        self.search_event.clear()
+        self.search_data = None
+
+        await self.ws.send_json({"type": "search_store", "query": query})
+
+        try:
+            await asyncio.wait_for(
+                self.search_event.wait(), timeout=SCREENSHOT_TIMEOUT_S + 5.0
+            )
+        except asyncio.TimeoutError:
+            log.warning("Store search timed out")
+            return {"error": "Store search timed out", "products": []}
+
+        msg = self.search_data
+        if msg is None or not msg.get("data"):
+            return {"error": "No search results received", "products": []}
+
+        page_analysis = await analyze_screenshot(
+            msg["data"], msg.get("url", ""), msg.get("page_title", "")
+        )
+
+        seafood = [p for p in page_analysis.products if p.is_seafood]
+        if not seafood:
+            return {"query": query, "products": [], "message": "No seafood found"}
+
+        scored_products = []
+        for p in seafood[:6]:
+            breakdown, total, grade = compute_score(p)
+            scored_products.append({
+                "product_name": p.product_name or p.species or "unknown",
+                "species": p.species,
+                "wild_or_farmed": p.wild_or_farmed,
+                "score": total,
+                "grade": grade,
+            })
+
+        scored_products.sort(key=lambda x: x["score"], reverse=True)
+        log.info("Store search returned %d products", len(scored_products))
+        return {"query": query, "products": scored_products}
 
     async def _keepalive(self) -> None:
         while True:

@@ -55,6 +55,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => sendResponse({ error: err.message }));
     return true;
   }
+
+  if (msg.type === 'SEARCH_STORE_FOR_VOICE') {
+    searchStoreForVoice(msg.url, msg.query)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
 });
 
 async function captureVisibleTab(tabId) {
@@ -137,6 +144,78 @@ async function handleAnalyze(tabId, url) {
   }
 
   return await response.json();
+}
+
+// ── Store search URL patterns ──
+const SEARCH_URL_PATTERNS = {
+  'www.wholefoodsmarket.com': (q) => `https://www.wholefoodsmarket.com/search?text=${encodeURIComponent(q)}`,
+  'www.instacart.com': (q) => `https://www.instacart.com/store/search/${encodeURIComponent(q)}`,
+  'www.walmart.com': (q) => `https://www.walmart.com/search?q=${encodeURIComponent(q)}`,
+  'www.kroger.com': (q) => `https://www.kroger.com/search?query=${encodeURIComponent(q)}`,
+  'www.safeway.com': (q) => `https://www.safeway.com/shop/search-results.html?q=${encodeURIComponent(q)}`,
+  'www.target.com': (q) => `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
+  'www.amazon.com': (q) => `https://www.amazon.com/s?k=${encodeURIComponent(q)}&i=amazonfresh`,
+};
+
+function buildSearchUrl(siteUrl, query) {
+  try {
+    const hostname = new URL(siteUrl).hostname;
+    const builder = SEARCH_URL_PATTERNS[hostname];
+    if (builder) return builder(query);
+    // Fallback: try common /search?q= pattern on same origin
+    const origin = new URL(siteUrl).origin;
+    return `${origin}/search?q=${encodeURIComponent(query)}`;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function searchStoreForVoice(currentUrl, query) {
+  const searchUrl = buildSearchUrl(currentUrl, query);
+  if (!searchUrl) throw new Error('Cannot determine search URL for this site');
+
+  // Open a background tab, wait for load, capture, close
+  const tab = await chrome.tabs.create({ url: searchUrl, active: false });
+
+  try {
+    // Wait for the tab to finish loading (max 12s)
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(listener);
+        reject(new Error('Search page load timed out'));
+      }, 12000);
+
+      function listener(tabId, info) {
+        if (tabId === tab.id && info.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(listener);
+          clearTimeout(timeout);
+          // Small delay for dynamic content to render
+          setTimeout(resolve, 1500);
+        }
+      }
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+
+    // Capture the search results page
+    const dataUrl = await new Promise((resolve, reject) => {
+      chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }, (result) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(result);
+      });
+    });
+
+    const base64 = dataUrl.split(',')[1];
+    const title = (await chrome.tabs.get(tab.id)).title || '';
+
+    return {
+      screenshot: base64,
+      url: searchUrl,
+      page_title: title,
+    };
+  } finally {
+    // Always close the background tab
+    try { chrome.tabs.remove(tab.id); } catch (_) {}
+  }
 }
 
 // Injected function — runs in page context

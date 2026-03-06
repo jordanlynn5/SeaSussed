@@ -133,6 +133,7 @@ async function connectVoice(data, preStream = null) {
       grade: data.grade,
       species: data.product_info?.species ?? null,
       wild_or_farmed: data.product_info?.wild_or_farmed ?? 'unknown',
+      all_products: data.all_products ?? null,
     });
   } catch (err) {
     console.warn('[SeaSussed] Voice start failed:', err.message);
@@ -309,11 +310,17 @@ function renderProductList(products) {
   showView('view-results-list');
 
   if (products.length > 0) {
-    const best = products[0];
     startVoiceAfterResult({
-      score: best.score,
-      grade: best.grade,
-      product_info: { species: best.species ?? null, wild_or_farmed: best.wild_or_farmed ?? 'unknown' },
+      score: products[0].score,
+      grade: products[0].grade,
+      product_info: { species: products[0].species ?? null, wild_or_farmed: products[0].wild_or_farmed ?? 'unknown' },
+      all_products: products.map(p => ({
+        product_name: p.product_name,
+        species: p.species,
+        wild_or_farmed: p.wild_or_farmed,
+        score: p.score,
+        grade: p.grade,
+      })),
     });
   }
 }

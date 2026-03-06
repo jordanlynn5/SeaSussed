@@ -149,6 +149,9 @@ class VoiceClient {
       case 'request_screenshot':
         await this._captureAndSendScreenshot();
         break;
+      case 'search_store':
+        await this._searchStoreAndSend(msg.query);
+        break;
       case 'score_result':
         this.onScoreResult(msg.score);
         break;
@@ -238,6 +241,37 @@ class VoiceClient {
       url: result.url,
       page_title: result.page_title,
       related_products: result.related_products,
+    }));
+  }
+
+  async _searchStoreAndSend(query) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    if (!tab?.id) return;
+
+    const result = await chrome.runtime.sendMessage({
+      type: 'SEARCH_STORE_FOR_VOICE',
+      tabId: tab.id,
+      url: tab.url,
+      query,
+    });
+
+    if (result.error) {
+      this.ws.send(JSON.stringify({
+        type: 'search_results',
+        data: '',
+        url: '',
+        page_title: '',
+        error: result.error,
+      }));
+      return;
+    }
+
+    this.ws.send(JSON.stringify({
+      type: 'search_results',
+      data: result.screenshot,
+      url: result.url,
+      page_title: result.page_title,
     }));
   }
 
