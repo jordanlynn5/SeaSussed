@@ -158,9 +158,9 @@ def test_voice_analyze_tool_call(
             msg = ws.receive_json()
             assert msg == {"type": "status", "state": "listening"}
 
-            # 3. thinking status (from tool_call handler)
+            # 3. analyzing status (from tool_call handler)
             msg = ws.receive_json()
-            assert msg == {"type": "status", "state": "thinking"}
+            assert msg == {"type": "status", "state": "analyzing"}
 
             # 4. request_screenshot
             msg = ws.receive_json()

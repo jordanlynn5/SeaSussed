@@ -272,6 +272,7 @@ class VoiceClient {
       data: result.screenshot,
       url: result.url,
       page_title: result.page_title,
+      page_text: result.page_text || '',
     }));
   }
 

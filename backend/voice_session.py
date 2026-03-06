@@ -115,8 +115,21 @@ search terms based on your marine biology knowledge. For example:
 Use your knowledge of which species, origins, and methods tend to score well. \
 Search for specific products the store would actually carry. \
 Keep queries short: "wild Alaska salmon", "MSC cod", "pole caught tuna".
-When you get results back, recommend the best-scoring options by name so the user \
-can search for them on the site.
+
+AFTER SEARCH RESULTS — GUIDE THE USER TO THE PRODUCT (critical):
+When you get search results back, you MUST give the user clear, actionable \
+instructions to find the product. Always include:
+1. The EXACT product name from the results (e.g. "365 Wild Caught Sockeye Salmon")
+2. A search instruction: "Search this site for [exact product name]"
+3. A next step: "Once you find it, click on it and I'll analyze the page for you."
+
+Example response: "Great news — I found '365 Wild Caught Alaskan Sockeye Salmon' \
+on this site and it scored a B. Search for 'wild sockeye salmon' on the site, \
+click on that product, and say 'analyze this' so we can go over the full rating."
+
+NEVER just say "I found a B-rated salmon" without telling the user the exact \
+product name and how to find it. The user cannot see your search results — you \
+are their only guide.
 
 ACKNOWLEDGE BEFORE TOOL CALLS (critical for UX):
 ALWAYS say a brief sentence out loud BEFORE calling any tool. The user hears \
@@ -129,9 +142,12 @@ Never call a tool without speaking first — the silence feels broken otherwise.
 
 AFTER RECEIVING A SCORE (from tool call) — respond conversationally:
 - Grade A: Warm and affirming. One-sentence reason. "Definitely grab it."
-- Grade B: Positive, mention the best alternative. One-sentence reason it isn't an A.
-- Grade C: Honest, not preachy. One-sentence concern. Suggest an alternative.
-- Grade D: Clear and direct. Brief reason. Suggest an alternative.
+- Grade B: Positive. One-sentence reason it isn't an A. Offer to search for a \
+  better option if they want: "Want me to search this store for something even better?"
+- Grade C: Honest, not preachy. One-sentence concern. Offer to search: \
+  "Want me to look for a more sustainable option on this site?"
+- Grade D: Clear and direct. Brief reason. Proactively offer to search: \
+  "I can search this store for a better choice — want me to?"
 
 Keep spoken responses SHORT: 2–4 sentences. The full score card is visible in the \
 panel so don't read numbers aloud.
@@ -151,6 +167,12 @@ If you get interrupted mid-sentence but the user doesn't actually say anything \
 where you left off. For example: "Oh sorry, thought you wanted to jump in! \
 Anyway, as I was saying…" Keep the recovery natural and quick — don't restart \
 your whole response, just pick up from roughly where you were cut off.
+
+DO NOT REPEAT YOURSELF:
+Never restate information you already said in this conversation. If you already \
+greeted the user and summarized the score, don't say it again. If asked the same \
+question twice, give a shorter answer or say "like I mentioned…" and add new detail. \
+Each response should contain new information, not rehash what was already covered.
 
 HONESTY RULE (hard):
 Never claim certainty about information not visible on the page. If species, origin, \
@@ -336,9 +358,23 @@ class VoiceSession:
                             log.info("First audio chunk sent to client")
 
                     if response.tool_call:
-                        await self.ws.send_json(
-                            {"type": "status", "state": "thinking"}
-                        )
+                        # Send specific status so client can show feedback
+                        tool_names = [
+                            fc.name
+                            for fc in response.tool_call.function_calls
+                        ]
+                        if "search_store" in tool_names:
+                            await self.ws.send_json(
+                                {"type": "status", "state": "searching"}
+                            )
+                        elif "analyze_current_product" in tool_names:
+                            await self.ws.send_json(
+                                {"type": "status", "state": "analyzing"}
+                            )
+                        else:
+                            await self.ws.send_json(
+                                {"type": "status", "state": "thinking"}
+                            )
                         tool_responses: list[types.FunctionResponse] = []
                         for fc in response.tool_call.function_calls:
                             if fc.name == "analyze_current_product":
@@ -470,7 +506,8 @@ class VoiceSession:
             return {"error": "No search results received", "products": []}
 
         page_analysis = await analyze_screenshot(
-            msg["data"], msg.get("url", ""), msg.get("page_title", "")
+            msg["data"], msg.get("url", ""), msg.get("page_title", ""),
+            page_text=msg.get("page_text", ""),
         )
 
         seafood = [p for p in page_analysis.products if p.is_seafood]

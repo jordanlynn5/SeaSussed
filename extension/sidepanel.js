@@ -94,8 +94,17 @@ function updateVoiceBar(state) {
   const dot = document.getElementById('voice-bar-indicator');
   const status = document.getElementById('voice-bar-status');
   if (!dot || !status) return;
-  dot.className = 'vbar-dot' + (state === 'speaking' ? ' speaking' : state === 'thinking' ? ' thinking' : '');
-  const labels = { listening: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking…' };
+  const thinkingStates = ['thinking', 'searching', 'analyzing'];
+  const dotClass = state === 'speaking' ? ' speaking'
+    : thinkingStates.includes(state) ? ' thinking' : '';
+  dot.className = 'vbar-dot' + dotClass;
+  const labels = {
+    listening: 'Listening…',
+    thinking: 'Thinking…',
+    searching: 'Searching the store…',
+    analyzing: 'Analyzing product…',
+    speaking: 'Speaking…',
+  };
   if (labels[state]) status.textContent = labels[state];
   if (state === 'ended' || state === 'error') stopVoiceBar();
 }

@@ -167,15 +167,16 @@ async def analyze_screenshot(
 
     parts: list[genai_types.Part] = []
 
-    # Primary screenshot
-    parts.append(
-        genai_types.Part(
-            inline_data=genai_types.Blob(
-                mime_type="image/png",
-                data=base64.b64decode(screenshot_b64),
+    # Primary screenshot (optional — may be empty for DOM-only search results)
+    if screenshot_b64:
+        parts.append(
+            genai_types.Part(
+                inline_data=genai_types.Blob(
+                    mime_type="image/png",
+                    data=base64.b64decode(screenshot_b64),
+                )
             )
         )
-    )
 
     # Additional product gallery images (back label, nutrition facts, etc.)
     for i, img_b64 in enumerate((product_images or [])[:_MAX_GALLERY_IMAGES]):

@@ -257,7 +257,7 @@ async function searchStoreForVoice(currentUrl, query) {
   const searchUrl = buildSearchUrl(currentUrl, query);
   if (!searchUrl) throw new Error('Cannot determine search URL for this site');
 
-  // Open a background tab, wait for load, capture, close
+  // Open search tab in background (invisible) — DOM-only, no screenshot needed
   const tab = await chrome.tabs.create({ url: searchUrl, active: false });
 
   try {
@@ -279,21 +279,62 @@ async function searchStoreForVoice(currentUrl, query) {
       chrome.tabs.onUpdated.addListener(listener);
     });
 
-    // Capture the search results page
-    const dataUrl = await new Promise((resolve, reject) => {
-      chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }, (result) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve(result);
-      });
-    });
+    // Scrape product text from search results DOM (no screenshot — tab is background)
+    const domResult = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const items = [];
+        // Common product card selectors across grocery sites
+        const cardSelectors = [
+          '[data-testid*="product"]', '[class*="product-card"]', '[class*="ProductCard"]',
+          '[class*="product-tile"]', '[class*="ProductTile"]', '[class*="product-item"]',
+          '[class*="ProductItem"]', '.product', '[data-component-type="s-search-result"]',
+          '[class*="search-result"]', 'li[class*="product"]',
+        ];
+        let cards = [];
+        for (const sel of cardSelectors) {
+          cards = document.querySelectorAll(sel);
+          if (cards.length > 0) break;
+        }
+        if (cards.length > 0) {
+          cards.forEach(card => {
+            const text = card.innerText?.trim();
+            if (text && text.length > 5 && text.length < 500) items.push(text);
+          });
+        }
+        // Fallback: grab product title elements
+        if (items.length === 0) {
+          const titleSels = [
+            '[data-testid*="product"] h2', '[data-testid*="product"] h3',
+            '.product-title', '.product-name', '[class*="ProductName"]',
+            '[class*="product-title"]', '[class*="ProductTitle"]',
+            'h2 a', 'h3 a',
+          ];
+          for (const sel of titleSels) {
+            document.querySelectorAll(sel).forEach(el => {
+              const text = el.innerText?.trim();
+              if (text && text.length > 3 && text.length < 200) items.push(text);
+            });
+            if (items.length > 0) break;
+          }
+        }
+        // Extra fallback: main content area
+        if (items.length === 0) {
+          const main = document.querySelector('main, [role="main"], #main-content, #search-results');
+          if (main) return 'SEARCH RESULTS:\n' + main.innerText.trim().substring(0, 4000);
+        }
+        return 'SEARCH RESULTS:\n' + items.slice(0, 20).join('\n---\n');
+      },
+    }).catch(() => [{ result: '' }]);
 
-    const base64 = dataUrl.split(',')[1];
     const title = (await chrome.tabs.get(tab.id)).title || '';
+    const pageText = domResult[0]?.result ?? '';
 
     return {
-      screenshot: base64,
+      screenshot: '',
       url: searchUrl,
       page_title: title,
+      page_text: pageText,
     };
   } finally {
     // Always close the background tab
