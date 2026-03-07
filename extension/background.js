@@ -265,25 +265,57 @@ async function searchStoreForVoice(currentUrl, query) {
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         chrome.tabs.onUpdated.removeListener(listener);
-        reject(new Error('Search page load timed out'));
+        resolve(); // resolve anyway — we'll try scraping whatever is there
       }, 12000);
 
       function listener(tabId, info) {
         if (tabId === tab.id && info.status === 'complete') {
           chrome.tabs.onUpdated.removeListener(listener);
           clearTimeout(timeout);
-          // Small delay for dynamic content to render
-          setTimeout(resolve, 1500);
+          resolve();
         }
       }
       chrome.tabs.onUpdated.addListener(listener);
     });
 
-    // Scrape product text from search results DOM (no screenshot — tab is background)
+    // Poll for SPA content to render (many grocery sites are React/Next.js)
+    await new Promise((resolve) => {
+      let elapsed = 0;
+      const poll = setInterval(async () => {
+        elapsed += 500;
+        try {
+          const [result] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              // Check if any product-like content has rendered
+              const sels = [
+                '[data-testid*="product"]', '[class*="product"]', '[class*="Product"]',
+                '[data-component-type="s-search-result"]', 'main a img',
+              ];
+              for (const sel of sels) {
+                if (document.querySelectorAll(sel).length > 0) return true;
+              }
+              // Fallback: check if main content has substantial text
+              const main = document.querySelector('main, [role="main"]');
+              return main ? main.innerText.trim().length > 200 : false;
+            },
+          });
+          if (result?.result || elapsed >= 6000) {
+            clearInterval(poll);
+            // Brief extra pause for final render
+            setTimeout(resolve, 500);
+          }
+        } catch {
+          if (elapsed >= 6000) { clearInterval(poll); resolve(); }
+        }
+      }, 500);
+    });
+
+    // Scrape product text + URLs from search results DOM
     const domResult = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => {
-        const items = [];
+        const products = [];
         // Common product card selectors across grocery sites
         const cardSelectors = [
           '[data-testid*="product"]', '[class*="product-card"]', '[class*="ProductCard"]',
@@ -299,42 +331,61 @@ async function searchStoreForVoice(currentUrl, query) {
         if (cards.length > 0) {
           cards.forEach(card => {
             const text = card.innerText?.trim();
-            if (text && text.length > 5 && text.length < 500) items.push(text);
+            if (!text || text.length <= 5 || text.length >= 500) return;
+            // Find the product link within the card
+            const link = card.querySelector('a[href]');
+            const url = link ? link.href : null;
+            products.push({ text, url });
           });
         }
-        // Fallback: grab product title elements
-        if (items.length === 0) {
+        // Fallback: grab product title elements (often are links themselves)
+        if (products.length === 0) {
           const titleSels = [
+            '[data-testid*="product"] h2 a', '[data-testid*="product"] h3 a',
             '[data-testid*="product"] h2', '[data-testid*="product"] h3',
-            '.product-title', '.product-name', '[class*="ProductName"]',
-            '[class*="product-title"]', '[class*="ProductTitle"]',
-            'h2 a', 'h3 a',
+            '.product-title a', '.product-name a',
+            '[class*="ProductName"] a', '[class*="product-title"] a',
+            '[class*="ProductTitle"] a', 'h2 a', 'h3 a',
           ];
           for (const sel of titleSels) {
             document.querySelectorAll(sel).forEach(el => {
               const text = el.innerText?.trim();
-              if (text && text.length > 3 && text.length < 200) items.push(text);
+              if (!text || text.length <= 3 || text.length >= 200) return;
+              const url = el.href || el.closest('a')?.href || null;
+              products.push({ text, url });
             });
-            if (items.length > 0) break;
+            if (products.length > 0) break;
           }
         }
-        // Extra fallback: main content area
-        if (items.length === 0) {
+        // Extra fallback: main content area (no URLs available)
+        if (products.length === 0) {
           const main = document.querySelector('main, [role="main"], #main-content, #search-results');
-          if (main) return 'SEARCH RESULTS:\n' + main.innerText.trim().substring(0, 4000);
+          if (main) return {
+            page_text: 'SEARCH RESULTS:\n' + main.innerText.trim().substring(0, 4000),
+            product_links: [],
+          };
         }
-        return 'SEARCH RESULTS:\n' + items.slice(0, 20).join('\n---\n');
+        // Build page_text for Gemini analysis + product_links for navigation
+        const pageText = 'SEARCH RESULTS:\n' + products.slice(0, 20).map(p => p.text).join('\n---\n');
+        const productLinks = products.slice(0, 20)
+          .filter(p => p.url)
+          .map(p => ({ name: p.text.split('\n')[0].trim(), url: p.url }));
+        return { page_text: pageText, product_links: productLinks };
       },
-    }).catch(() => [{ result: '' }]);
+    }).catch(() => [{ result: { page_text: '', product_links: [] } }]);
 
     const title = (await chrome.tabs.get(tab.id)).title || '';
-    const pageText = domResult[0]?.result ?? '';
+    const scraped = domResult[0]?.result ?? { page_text: '', product_links: [] };
+    // Handle both old string format and new object format
+    const pageText = typeof scraped === 'string' ? scraped : (scraped.page_text || '');
+    const productLinks = typeof scraped === 'object' ? (scraped.product_links || []) : [];
 
     return {
       screenshot: '',
       url: searchUrl,
       page_title: title,
       page_text: pageText,
+      product_links: productLinks,
     };
   } finally {
     // Always close the background tab

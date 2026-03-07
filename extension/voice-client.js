@@ -152,6 +152,9 @@ class VoiceClient {
       case 'search_store':
         await this._searchStoreAndSend(msg.query);
         break;
+      case 'navigate':
+        await this._navigateToUrl(msg.url);
+        break;
       case 'score_result':
         this.onScoreResult(msg.score);
         break;
@@ -273,7 +276,15 @@ class VoiceClient {
       url: result.url,
       page_title: result.page_title,
       page_text: result.page_text || '',
+      product_links: result.product_links || [],
     }));
+  }
+
+  async _navigateToUrl(url) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs[0];
+    if (!tab?.id || !url) return;
+    await chrome.tabs.update(tab.id, { url });
   }
 
   _waitForOpen() {

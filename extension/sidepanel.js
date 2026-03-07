@@ -90,11 +90,29 @@ function showVoiceBar(text) {
   if (s) s.textContent = text;
 }
 
+function playNotificationTone() {
+  // Short rising tone to signal activity (non-jarring, no voice change)
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(600, ctx.currentTime);
+    osc.frequency.linearRampToValueAtTime(900, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.2);
+    setTimeout(() => ctx.close(), 300);
+  } catch (_) {}
+}
+
 function updateVoiceBar(state) {
   const dot = document.getElementById('voice-bar-indicator');
   const status = document.getElementById('voice-bar-status');
   if (!dot || !status) return;
-  const thinkingStates = ['thinking', 'searching', 'analyzing'];
+  const thinkingStates = ['thinking', 'searching', 'analyzing', 'navigating'];
   const dotClass = state === 'speaking' ? ' speaking'
     : thinkingStates.includes(state) ? ' thinking' : '';
   dot.className = 'vbar-dot' + dotClass;
@@ -103,9 +121,12 @@ function updateVoiceBar(state) {
     thinking: 'Thinking…',
     searching: 'Searching the store…',
     analyzing: 'Analyzing product…',
+    navigating: 'Opening product page…',
     speaking: 'Speaking…',
   };
   if (labels[state]) status.textContent = labels[state];
+  // Audio cue so user knows something is happening during silence
+  if (state === 'searching' || state === 'analyzing') playNotificationTone();
   if (state === 'ended' || state === 'error') stopVoiceBar();
 }
 
@@ -124,7 +145,11 @@ async function connectVoice(data, preStream = null) {
   }
   voiceClient = new VoiceClient();
   voiceClient.onStatus = updateVoiceBar;
-  voiceClient.onScoreResult = () => {};
+  voiceClient.onScoreResult = (score) => {
+    if (!score?.product_info?.is_seafood) return;
+    currentResult = score;
+    renderResult(score);
+  };
   voiceClient.onError = () => stopVoiceBar();
   voiceClient.onAudioActivity = () => {
     const dot = document.getElementById('voice-bar-indicator');

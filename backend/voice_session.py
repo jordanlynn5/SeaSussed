@@ -20,6 +20,30 @@ LIVE_MODEL = "gemini-live-2.5-flash-native-audio"
 SCREENSHOT_TIMEOUT_S = 8.0
 KEEPALIVE_INTERVAL_S = 30.0
 
+def _find_product_url(
+    product_name: str, links: list[dict[str, str]]
+) -> str | None:
+    """Find the best matching URL for a product name from scraped links."""
+    if not product_name or not links:
+        return None
+    name_lower = product_name.lower()
+    # Try exact substring match first
+    for link in links:
+        if name_lower in link.get("name", "").lower():
+            return link.get("url")
+    # Try matching significant words (3+ chars)
+    words = [w for w in name_lower.split() if len(w) >= 3]
+    best_url: str | None = None
+    best_count = 0
+    for link in links:
+        link_lower = link.get("name", "").lower()
+        count = sum(1 for w in words if w in link_lower)
+        if count > best_count:
+            best_count = count
+            best_url = link.get("url")
+    return best_url if best_count >= 2 else None
+
+
 ANALYZE_CURRENT_PRODUCT_TOOL = types.FunctionDeclaration(
     name="analyze_current_product",
     description=(
@@ -50,6 +74,25 @@ SEARCH_STORE_TOOL = types.FunctionDeclaration(
             ),
         },
         required=["query"],
+    ),
+)
+
+NAVIGATE_TO_PRODUCT_TOOL = types.FunctionDeclaration(
+    name="navigate_to_product",
+    description=(
+        "Navigate the user's browser to a specific product page. Use this after "
+        "search_store returns results — call it with the URL of the product you "
+        "want to show the user. The page will open in their current tab."
+    ),
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "url": types.Schema(
+                type=types.Type.STRING,
+                description="The full URL of the product page to navigate to",
+            ),
+        },
+        required=["url"],
     ),
 )
 
@@ -116,20 +159,22 @@ Use your knowledge of which species, origins, and methods tend to score well. \
 Search for specific products the store would actually carry. \
 Keep queries short: "wild Alaska salmon", "MSC cod", "pole caught tuna".
 
-AFTER SEARCH RESULTS — GUIDE THE USER TO THE PRODUCT (critical):
-When you get search results back, you MUST give the user clear, actionable \
-instructions to find the product. Always include:
-1. The EXACT product name from the results (e.g. "365 Wild Caught Sockeye Salmon")
-2. A search instruction: "Search this site for [exact product name]"
-3. A next step: "Once you find it, click on it and I'll analyze the page for you."
+AFTER SEARCH RESULTS — TELL THE USER IMMEDIATELY (critical):
+The tool response includes a "summary" field — follow its instructions. \
+IMMEDIATELY tell the user what you found. Do NOT wait to be asked.
 
-Example response: "Great news — I found '365 Wild Caught Alaskan Sockeye Salmon' \
-on this site and it scored a B. Search for 'wild sockeye salmon' on the site, \
-click on that product, and say 'analyze this' so we can go over the full rating."
+The search tool AUTOMATICALLY opens the best product's page in the user's \
+browser when a URL is available. You do NOT need to call navigate_to_product \
+separately — it's already done. Just tell the user what you found and that \
+you've opened the page: "I found [product name] with a Grade [X]. I've \
+pulled it up for you — want me to analyze it?"
 
-NEVER just say "I found a B-rated salmon" without telling the user the exact \
-product name and how to find it. The user cannot see your search results — you \
-are their only guide.
+If no URL was available (the summary will say so), tell the user the exact \
+product name and how to search for it on the site.
+
+NEVER just say "I found some results" or "I searched for tuna" without \
+immediately telling the user WHAT you found. The user cannot see your search \
+results — you are their only guide.
 
 ACKNOWLEDGE BEFORE TOOL CALLS (critical for UX):
 ALWAYS say a brief sentence out loud BEFORE calling any tool. The user hears \
@@ -141,13 +186,24 @@ Examples:
 Never call a tool without speaking first — the silence feels broken otherwise.
 
 AFTER RECEIVING A SCORE (from tool call) — respond conversationally:
-- Grade A: Warm and affirming. One-sentence reason. "Definitely grab it."
-- Grade B: Positive. One-sentence reason it isn't an A. Offer to search for a \
-  better option if they want: "Want me to search this store for something even better?"
+- Grade A: Warm and affirming. "Definitely grab it." Then briefly explain WHY \
+  it scores so well — what makes this species, origin, or method sustainable. \
+  Educate the user: "Alaska sockeye salmon scores high because the fishery is \
+  tightly managed with science-based catch limits." Do NOT suggest searching \
+  for something better — they already have a great choice. If they want more, \
+  offer to find similar sustainable options on the site.
+- Grade B: Positive. Brief reason it isn't an A. Ask if they want to know more \
+  about the product or if they'd like to explore other options.
 - Grade C: Honest, not preachy. One-sentence concern. Offer to search: \
   "Want me to look for a more sustainable option on this site?"
 - Grade D: Clear and direct. Brief reason. Proactively offer to search: \
   "I can search this store for a better choice — want me to?"
+
+IMPORTANT: If the user specifically ASKED you to find the best option (e.g. \
+"find me the most sustainable tuna") and the search returned a top result, \
+do NOT immediately suggest searching for something even better. They already \
+asked for the best and you found it. Instead, share why it scored well and \
+ask if they want you to open the page.
 
 Keep spoken responses SHORT: 2–4 sentences. The full score card is visible in the \
 panel so don't read numbers aloud.
@@ -185,6 +241,7 @@ LIVE_CONFIG = types.LiveConnectConfig(
     system_instruction=VOICE_SYSTEM_PROMPT,
     tools=[types.Tool(function_declarations=[
         ANALYZE_CURRENT_PRODUCT_TOOL, SEARCH_STORE_TOOL,
+        NAVIGATE_TO_PRODUCT_TOOL,
     ])],
 )
 
@@ -203,6 +260,9 @@ class VoiceSession:
         self.search_data: dict[str, Any] | None = None
         self.greeting_event = asyncio.Event()
         self.greeting_context: dict[str, Any] | None = None
+        self.product_links: list[dict[str, str]] = []
+        self.current_grade: str = ""
+        self.current_score: int = 0
 
     async def run(self) -> None:
         try:
@@ -336,6 +396,10 @@ class VoiceSession:
             elif msg_type == "result_context":
                 self.greeting_context = msg
                 self.greeting_event.set()
+                # Track current product grade for search comparisons
+                if msg.get("grade"):
+                    self.current_grade = msg["grade"]
+                    self.current_score = msg.get("score", 0)
             elif msg_type == "stop":
                 log.info("Client requested stop")
                 break
@@ -371,6 +435,10 @@ class VoiceSession:
                             await self.ws.send_json(
                                 {"type": "status", "state": "analyzing"}
                             )
+                        elif "navigate_to_product" in tool_names:
+                            await self.ws.send_json(
+                                {"type": "status", "state": "navigating"}
+                            )
                         else:
                             await self.ws.send_json(
                                 {"type": "status", "state": "thinking"}
@@ -385,6 +453,11 @@ class VoiceSession:
                                 query = (fc.args or {}).get("query", "")
                                 result = await self._handle_search_store(
                                     query
+                                )
+                            elif fc.name == "navigate_to_product":
+                                url = (fc.args or {}).get("url", "")
+                                result = (
+                                    await self._handle_navigate_to_product(url)
                                 )
                             else:
                                 result = {"error": f"Unknown tool: {fc.name}"}
@@ -465,6 +538,10 @@ class VoiceSession:
             product_info, msg.get("related_products", [])
         )
 
+        # Track current product for search comparisons
+        self.current_grade = score_result.grade
+        self.current_score = score_result.score
+
         await self.ws.send_json({
             "type": "score_result",
             "score": score_result.model_dump(),
@@ -502,7 +579,7 @@ class VoiceSession:
             return {"error": "Store search timed out", "products": []}
 
         msg = self.search_data
-        if msg is None or not msg.get("data"):
+        if msg is None or (not msg.get("data") and not msg.get("page_text")):
             return {"error": "No search results received", "products": []}
 
         page_analysis = await analyze_screenshot(
@@ -514,20 +591,115 @@ class VoiceSession:
         if not seafood:
             return {"query": query, "products": [], "message": "No seafood found"}
 
+        # Match scraped product URLs to extracted products by name overlap
+        product_links: list[dict[str, str]] = msg.get("product_links", [])
+        self.product_links = product_links  # store for navigate_to_product
+
         scored_products = []
         for p in seafood[:6]:
             breakdown, total, grade = compute_score(p)
-            scored_products.append({
-                "product_name": p.product_name or p.species or "unknown",
+            name = p.product_name or p.species or "unknown"
+            # Find matching URL from scraped links
+            url = _find_product_url(name, product_links)
+            entry: dict[str, Any] = {
+                "product_name": name,
                 "species": p.species,
                 "wild_or_farmed": p.wild_or_farmed,
                 "score": total,
                 "grade": grade,
-            })
+            }
+            if url:
+                entry["url"] = url
+            scored_products.append(entry)
 
         scored_products.sort(key=lambda x: x["score"], reverse=True)
         log.info("Store search returned %d products", len(scored_products))
-        return {"query": query, "products": scored_products}
+
+        # Filter: only recommend products that score higher than current
+        better_products = [
+            p for p in scored_products
+            if p["score"] > self.current_score
+        ] if self.current_score > 0 else scored_products
+
+        # Use the better list for navigation, but keep full list for context
+        nav_target = better_products[0] if better_products else (
+            scored_products[0] if scored_products else None
+        )
+
+        # Auto-navigate to best product if URL available
+        navigated = False
+        if nav_target and "url" in nav_target:
+            await self.ws.send_json(
+                {"type": "status", "state": "navigating"}
+            )
+            await self.ws.send_json(
+                {"type": "navigate", "url": nav_target["url"]}
+            )
+            navigated = True
+            log.info("Auto-navigated to: %s", nav_target["url"])
+
+        # Build explicit summary so Gemini clearly presents results
+        if nav_target:
+            best = nav_target
+            best_name = best["product_name"]
+            is_better = best["score"] > self.current_score
+            comparison = ""
+            if self.current_grade and is_better:
+                comparison = (
+                    f" That's better than the current product "
+                    f"(Grade {self.current_grade}, {self.current_score}/100)."
+                )
+            elif self.current_grade and not is_better:
+                comparison = (
+                    f" NOTE: This is NOT better than the current product "
+                    f"(Grade {self.current_grade}, {self.current_score}/100). "
+                    f"Be honest — tell the user the best you found doesn't "
+                    f"beat what they have. Their current product is the "
+                    f"better choice."
+                )
+            if navigated:
+                summary = (
+                    f"Found {len(scored_products)} seafood products. "
+                    f"Best option: \"{best_name}\" (Grade {best['grade']}, "
+                    f"score {best['score']}/100).{comparison} "
+                    f"The page is already open in the user's browser. "
+                    f"Tell them what you found and offer to analyze it."
+                )
+            else:
+                summary = (
+                    f"Found {len(scored_products)} seafood products. "
+                    f"Best option: \"{best_name}\" (Grade {best['grade']}, "
+                    f"score {best['score']}/100).{comparison} "
+                    f"Tell the user to search this site for "
+                    f"\"{best_name}\" and click on it."
+                )
+        else:
+            summary = (
+                f"No seafood found for \"{query}\". Suggest the user "
+                f"try a different search term."
+            )
+
+        return {
+            "query": query,
+            "products": scored_products,
+            "summary": summary,
+        }
+
+    async def _handle_navigate_to_product(self, url: str) -> dict[str, Any]:
+        """Navigate the user's browser to a product page."""
+        if not url:
+            return {"error": "No URL provided"}
+        log.info("Navigating user to: %s", url)
+        await self.ws.send_json({"type": "navigate", "url": url})
+        return {
+            "success": True,
+            "url": url,
+            "instruction": (
+                "The page is loading now. Tell the user you've opened the "
+                "product page and offer to analyze it: 'I've pulled that up "
+                "for you. Want me to analyze it?'"
+            ),
+        }
 
     async def _keepalive(self) -> None:
         while True:
