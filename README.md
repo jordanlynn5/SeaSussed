@@ -16,13 +16,18 @@ A Chrome extension that uses Gemini 2.5 Flash to analyze any grocery website and
 
 SeaSussed installs as a Chrome side panel extension. When you browse seafood products on any grocery website, it:
 
-1. Captures a screenshot of the product page
-2. Sends it to a Gemini multimodal agent that visually reads the species, origin, and fishing method
-3. Scores the product across four sustainability dimensions (0–100)
-4. Shows you the grade (A–D) with a breakdown and 3 better alternatives
+1. Captures a screenshot, product gallery images, and page text from the product page
+2. Sends everything to a Gemini multimodal agent that reads the species, origin, fishing method, and certifications — including back-of-package labels
+3. Scores the product across four sustainability dimensions (0–100) with progressive streaming results
+4. Shows you the grade (A-D) with an expandable breakdown, educational score factors, and alternatives from the same site
 5. Lets you correct any misread fields and re-score without a new screenshot
 
-It also supports **voice mode** — talk to a live Gemini session that sees your screen and answers sustainability questions in real time.
+**Voice mode** takes it further — a live Gemini audio session that:
+- Reacts to your score with grade-appropriate commentary
+- Explains *why* a product scores the way it does
+- Searches the store for better alternatives when asked
+- Opens product pages directly in your browser
+- Answers any sustainability or ocean ecology questions
 
 It works on any site — Amazon Fresh, Whole Foods, Instacart, Walmart, specialty retailers — without relying on structured data from the retailer.
 
@@ -87,27 +92,27 @@ gcloud run deploy seasussed-backend \
 
 ```
 Chrome Extension (side panel)
-  ├── Analyze button → captures screenshot → POST /analyze
+  ├── Analyze → screenshot + gallery images + DOM text → POST /analyze/stream (SSE)
   ├── "Not right?" correction → POST /score (no screenshot)
-  └── Voice button → WebSocket /voice ←→ Gemini Live API
+  └── Voice → WebSocket /voice ←→ Gemini Live API
+        ├── analyze_current_product — captures & scores current page
+        ├── search_store — DOM-scrapes store search results, scores & auto-navigates
+        └── navigate_to_product — opens a product page in user's browser
 
 Cloud Run (FastAPI)
-  ├── POST /analyze
-  │     ScreenAnalyzerAgent (Gemini vision)
-  │       → species, origin, method, certifications
-  │     scoring.py (pure Python)
-  │       → 0–100 score, grade, breakdown, alternatives
-  │     explanation.py (Gemini)
-  │       → 2–3 sentence plain-English summary
+  ├── POST /analyze/stream (SSE)
+  │     Phase 1 (instant): ScreenAnalyzerAgent (Gemini vision, multi-image)
+  │       → species, origin, method, certifications → score + breakdown
+  │     Phase 2 (~2-3s): alternatives + explanation → complete result
   │
-  ├── POST /score
-  │     Re-scores corrected product info (no vision step)
+  ├── POST /analyze — single-response version (backward compat)
+  │
+  ├── POST /score — re-scores corrected product info (no vision step)
   │
   └── WS /voice
-        VoiceSession ←→ Gemini Live API (bidirectional audio)
-          Microphone → 16kHz PCM → Gemini
-          Gemini → 24kHz PCM → Speaker
-          Gemini requests screenshot on demand → /analyze pipeline
+        VoiceSession ←→ Gemini Live (gemini-live-2.5-flash-native-audio)
+          Mic → 16kHz PCM → Gemini → 24kHz PCM → Speaker
+          Tools: screenshot capture, store search + scoring, page navigation
 ```
 
 ### Data Sources
@@ -138,9 +143,10 @@ Four categories, total 0–100:
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Health check |
-| `POST` | `/analyze` | Screenshot → sustainability score |
-| `POST` | `/score` | Re-score corrected product info |
-| `WS` | `/voice` | Gemini Live voice session |
+| `POST` | `/analyze/stream` | Multi-image analysis → SSE progressive results |
+| `POST` | `/analyze` | Multi-image analysis → single JSON response |
+| `POST` | `/score` | Re-score corrected product info (no vision) |
+| `WS` | `/voice` | Gemini Live voice session with tool calling |
 
 ---
 
