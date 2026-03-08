@@ -158,6 +158,9 @@ class VoiceClient {
       case 'score_result':
         this.onScoreResult(msg.score);
         break;
+      case 'announcement':
+        this._speakAnnouncement(msg.text);
+        break;
       case 'status':
         console.log('[SeaSussed] Status from server:', msg.state);
         if (msg.state === 'listening') this._receivedFirstAudio = false;
@@ -285,6 +288,18 @@ class VoiceClient {
     const tab = tabs[0];
     if (!tab?.id || !url) return;
     await chrome.tabs.update(tab.id, { url });
+  }
+
+  _speakAnnouncement(text) {
+    try {
+      speechSynthesis.cancel(); // clear any queued utterances
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 1.1;
+      utt.volume = 0.8;
+      speechSynthesis.speak(utt);
+    } catch (err) {
+      console.warn('[SeaSussed] SpeechSynthesis unavailable:', err.message);
+    }
   }
 
   _waitForOpen() {
