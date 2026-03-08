@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 tests/
-data/
-*.db
+# data/seafood.db is intentionally included — baked into the image at build time
+data/*.parquet
+data/*.csv
 .env

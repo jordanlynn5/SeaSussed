@@ -928,7 +928,7 @@ uv run mypy . 2>&1; uv run ruff check . 2>&1; uv run pytest tests/test_analyze.p
 
 ## Manual Success Criteria
 
-- Take `whole_foods_sockeye.png`: navigate to wholefoodsmarket.com, find a wild Alaska sockeye salmon product page, take a full-page screenshot
+- Take `wegmans_sockeye.png`: navigate to wegmans.com, find a wild Alaska sockeye salmon product page, take a full-page screenshot
 - Take `amazon_pasta.png`: any non-seafood product on Amazon
 - `POST /analyze` with sockeye fixture → `grade` is A or B, `score` > 60
 - `POST /score` with corrected bluefin tuna → `grade` is D, `score` < 30

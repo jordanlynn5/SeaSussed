@@ -258,3 +258,12 @@ curl "$SERVICE_URL/health"
 - GCP project created and billing enabled
 - Vertex AI API enabled (`gcloud ai models list --region=us-central1` returns results)
 - Service account created with `roles/aiplatform.user`
+
+---
+
+## ✅ Phase 1 Complete — 2026-03-02
+
+- All automated criteria pass: mypy (10 files), ruff, pytest (3/3)
+- Scaffold files created: database.py, scoring.py, agents/screen_analyzer.py, scripts/build_database.py
+- Cloud Run deployed (project: seasussed-489008, commit 152191b)
+- Minor deviations (non-blocking): pyproject.toml uses [dependency-groups] (PEP 735, functionally identical to [tool.uv]); models.py includes forward-looking ScoreFactor class for Phase 5
