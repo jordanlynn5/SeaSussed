@@ -179,10 +179,10 @@ This refactor is a prerequisite for both Phase 1 and Phase 2 (it affects only ba
 
 | Phase | Name | Files | Batch-eligible |
 |---|---|---|---|
-| Pre | Refactor: extract `pipeline.py` | `main.py`, `pipeline.py` | No — prerequisite |
-| 1 | Backend: Live API session + `/voice` endpoint | `voice_session.py`, `main.py`, tests | ✅ after Pre |
-| 2 | Extension: audio pipeline + WS client | `audio-worklet-processor.js`, `voice-client.js`, `background.js` | ✅ after Pre |
-| 3 | Extension: voice mode UI | `sidepanel.html`, `sidepanel.js` | No — depends on 1+2 |
+| Pre | Refactor: extract `pipeline.py` | `main.py`, `pipeline.py` | ✅ complete |
+| 1 | Backend: Live API session + `/voice` endpoint | `voice_session.py`, `main.py`, tests | ✅ complete |
+| 2 | Extension: audio pipeline + WS client | `audio-worklet-processor.js`, `voice-client.js`, `background.js` | ✅ complete |
+| 3 | Extension: voice mode UI | `sidepanel.html`, `sidepanel.js` | ✅ complete |
 
 Phases 1 and 2 are **[batch-eligible]** — they touch completely different file sets and share only the protocol defined in this document.
 

@@ -1,27 +1,21 @@
-"""ADK LlmAgent for extracting product info from grocery page screenshots.
+"""Screen analyzer using Gemini GenAI SDK.
 
-Uses Google ADK's LlmAgent with Gemini 2.5 Flash multimodal to extract
+Uses Gemini 2.5 Flash multimodal via the Google GenAI SDK to extract
 structured PageAnalysis from a base64 PNG screenshot of a grocery page.
 
 Detects page type (single product, product listing, or no seafood) and
 extracts product info for all visible seafood products (up to 10).
-
-The Runner and session service are initialized lazily on first call to
-avoid import-time Vertex AI credential requirements.
 """
 
+import asyncio
 import base64
 import json
 import logging
-import uuid
 from typing import Any
 
-from google.adk.agents import LlmAgent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types as genai_types
 
-from gemini_client import strip_json_fences
+from gemini_client import get_genai_client, strip_json_fences
 from models import PageAnalysis, ProductInfo
 
 log = logging.getLogger(__name__)
@@ -61,11 +55,20 @@ For each seafood product, extract from ANY of the provided images or text:
   "farmed" if label says farmed/farm-raised/aquaculture;
   "unknown" if not visible in any source
 - fishing_method: specific gear type if visible — null if not shown
-- origin_region: catch or farm location if visible in any image or text
-  (check back labels, ingredient lists, product details) — null if not shown
+- origin_region: catch or farm location if visible in any image or text.
+  READ EVERY IMAGE CAREFULLY for origin text. Common locations on packaging:
+  "Product of [country]", "Farm-raised in [country]", "Caught in [region]",
+  "Origin: [country]", "Distributed by... [country]". Check the BACK of the
+  bag/box — origin is often in small print near the barcode, nutrition facts,
+  or ingredient list. If ANY image shows origin text, extract it. null ONLY
+  if no origin text exists in any image or DOM text.
 - certifications: list of certification marks visible in any image or
   mentioned in text (MSC, ASC, BAP, GlobalG.A.P., FOS, ASMI,
   Responsibly Farmed, Sustainably Sourced, etc.)
+  IMPORTANT: Look for chain-of-custody codes like "MSC-C-12345" or
+  "ASC-C-12345" — these confirm certification even without a logo.
+  Also look for certification statements like "certified to the MSC's
+  standard" or "www.msc.org" in fine print on back labels.
 - product_name: the full product title/name — null if not visible
 
 For "single_product": extract one product with full detail.
@@ -87,30 +90,36 @@ CRITICAL RULES:
 3. For species: if you can see "salmon" but not which type, return "salmon".
 4. is_seafood must be false for non-seafood items (chicken, pasta, vegetables).
 5. product_name should be the visible product title, exactly as shown.
+6. SPECIES IDENTIFICATION: The product title and text labels are the PRIMARY
+   source for species. NEVER override what the text says based on how the fish
+   looks in a photo. If the title says "yellowfin tuna" the species is yellowfin
+   tuna, regardless of the color or appearance of the fish in the image. Text
+   labels are authoritative; visual appearance of raw fish is not reliable.
+7. ORIGIN — READ EVERY IMAGE, NEVER GUESS: origin_region must come from text
+   visible in the images or DOM text. Scrutinize EVERY provided image — zoom in
+   mentally on fine print, back labels, and text near barcodes. Common patterns:
+   "Product of India", "Farm Raised in India", "Wild Caught in Alaska",
+   "Produce of Thailand". If you see it in ANY image, extract it.
+   If no origin is explicitly stated in any image or text, return null.
+   Do NOT infer origin from species name, brand, store, or general knowledge.
+8. WILD_OR_FARMED — NEVER GUESS: Must come from explicit text like "wild-caught",
+   "farm-raised", "farmed", or "aquaculture" visible on the page. Do NOT infer
+   from species name or general knowledge. No text about method → "unknown".
 
 Return ONLY the JSON object with no explanation or markdown fencing."""
 
-_runner: Runner | None = None
-_session_service: InMemorySessionService | None = None
-
-
-def _get_runner() -> tuple[Runner, InMemorySessionService]:
-    global _runner, _session_service
-    if _runner is None:
-        agent = LlmAgent(
-            name="screen_analyzer",
-            model="gemini-2.5-flash",
-            instruction=SCREEN_ANALYZER_INSTRUCTION,
-            output_schema=PageAnalysis,
-        )
-        _session_service = InMemorySessionService()  # type: ignore[no-untyped-call]
-        _runner = Runner(
-            agent=agent,
-            app_name="seasussed",
-            session_service=_session_service,
-        )
-    assert _session_service is not None
-    return _runner, _session_service
+def _call_gemini_vision(parts: list[genai_types.Part]) -> str:
+    """Synchronous Gemini vision call (run via asyncio.to_thread)."""
+    client = get_genai_client()
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=genai_types.Content(role="user", parts=parts),
+        config=genai_types.GenerateContentConfig(
+            system_instruction=SCREEN_ANALYZER_INSTRUCTION,
+            response_mime_type="application/json",
+        ),
+    )
+    return response.text or ""
 
 
 def _parse_page_analysis(text: str) -> PageAnalysis:
@@ -154,17 +163,6 @@ async def analyze_screenshot(
     product_images: list[str] | None = None,
 ) -> PageAnalysis:
     """Run the screen analyzer on screenshot(s) + page text and return PageAnalysis."""
-    runner, session_service = _get_runner()
-
-    user_id = "analyze"
-    session_id = str(uuid.uuid4())
-
-    await session_service.create_session(
-        app_name="seasussed",
-        user_id=user_id,
-        session_id=session_id,
-    )
-
     parts: list[genai_types.Part] = []
 
     # Primary screenshot (optional — may be empty for DOM-only search results)
@@ -212,20 +210,12 @@ async def analyze_screenshot(
 
     parts.append(genai_types.Part(text="\n".join(text_sections)))
 
-    message = genai_types.Content(role="user", parts=parts)
-
-    final_text = ""
-    async for event in runner.run_async(
-        user_id=user_id,
-        session_id=session_id,
-        new_message=message,
-    ):
-        if event.is_final_response():
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if hasattr(part, "text") and part.text:
-                        final_text = str(part.text)
-                        break
-            break
-
-    return _parse_page_analysis(final_text)
+    log.info(
+        "Gemini vision input: %d parts, %d chars page_text, %d gallery images",
+        len(parts),
+        len(page_text) if page_text else 0,
+        len(product_images) if product_images else 0,
+    )
+    raw = await asyncio.to_thread(_call_gemini_vision, parts)
+    log.info("Gemini vision raw response: %s", raw[:1000])
+    return _parse_page_analysis(raw)

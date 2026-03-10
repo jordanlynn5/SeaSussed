@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from collections import defaultdict
 from collections.abc import AsyncGenerator
 from time import time
@@ -29,6 +30,21 @@ _RATE_LIMIT = 10
 _RATE_WINDOW = 60.0
 
 
+def _get_client_ip(request: Request) -> str:
+    """Extract client IP, checking X-Forwarded-For for Cloud Run.
+
+    Set DEV_CLIENT_IP env var to override for local testing (private IPs
+    can't be geolocated).
+    """
+    dev_ip = os.environ.get("DEV_CLIENT_IP")
+    if dev_ip:
+        return dev_ip
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
 def _check_rate_limit(ip: str) -> None:
     now = time()
     _request_times[ip] = [t for t in _request_times[ip] if now - t < _RATE_WINDOW]
@@ -49,7 +65,7 @@ async def health() -> dict[str, str]:
 async def analyze(request: Request, body: AnalyzeRequest) -> AnalyzeResponse:
     if not body.screenshot:
         raise HTTPException(status_code=400, detail="screenshot is required")
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_client_ip(request)
     _check_rate_limit(ip)
 
     page_analysis = await analyze_screenshot(
@@ -59,7 +75,7 @@ async def analyze(request: Request, body: AnalyzeRequest) -> AnalyzeResponse:
         page_text=body.page_text,
         product_images=body.product_images,
     )
-    return await analyze_page(page_analysis, body.related_products)
+    return await analyze_page(page_analysis, body.related_products, client_ip=ip)
 
 
 @app.post("/analyze/stream")
@@ -73,7 +89,7 @@ async def analyze_stream(request: Request, body: AnalyzeRequest) -> StreamingRes
     """
     if not body.screenshot:
         raise HTTPException(status_code=400, detail="screenshot is required")
-    ip = request.client.host if request.client else "unknown"
+    ip = _get_client_ip(request)
     _check_rate_limit(ip)
 
     async def generate() -> AsyncGenerator[str, None]:
@@ -88,16 +104,19 @@ async def analyze_stream(request: Request, body: AnalyzeRequest) -> StreamingRes
             product_images=body.product_images,
         )
 
-        async for event in analyze_page_progressive(page_analysis, body.related_products):
+        async for event in analyze_page_progressive(
+            page_analysis, body.related_products, client_ip=ip
+        ):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/score", response_model=SustainabilityScore)
-async def score_endpoint(request: ScoreRequest) -> SustainabilityScore:
+async def score_endpoint(request: Request, body: ScoreRequest) -> SustainabilityScore:
     """Re-score without vision. Used by 'Not right?' correction flow."""
-    return await run_scoring_pipeline(request.product_info, [])
+    ip = _get_client_ip(request)
+    return await run_scoring_pipeline(body.product_info, [], client_ip=ip)
 
 
 @app.websocket("/voice")

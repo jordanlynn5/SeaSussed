@@ -133,16 +133,25 @@ def test_voice_websocket_connects_and_stops(mock_get_client: MagicMock) -> None:
 # ── Test 2: Tool call → screenshot → score_result ────────────────────────
 
 
-@patch("voice_session.run_scoring_pipeline", new_callable=AsyncMock, return_value=MOCK_SCORE)
+@patch("voice_session.get_health_info", return_value=None)
+@patch("voice_session.generate_template_content", return_value=("Atlantic cod scores a B.", []))
+@patch("voice_session.compute_score")
 @patch("voice_session.analyze_screenshot", new_callable=AsyncMock)
 @patch("voice_session.get_genai_client")
 def test_voice_analyze_tool_call(
     mock_get_client: MagicMock,
     mock_analyze: AsyncMock,
-    mock_pipeline: MagicMock,
+    mock_compute: MagicMock,
+    mock_template: MagicMock,
+    mock_health: MagicMock,
 ) -> None:
     mock_analyze.return_value = PageAnalysis(
         page_type="single_product", products=[MOCK_PRODUCT_INFO]
+    )
+    mock_compute.return_value = (
+        ScoreBreakdown(biological=15, practices=18, management=22, ecological=17),
+        72,
+        "B",
     )
 
     session = MockSession(responses=[_make_tool_call_response()])
@@ -161,10 +170,6 @@ def test_voice_analyze_tool_call(
             # 3. analyzing status (from tool_call handler)
             msg = ws.receive_json()
             assert msg == {"type": "status", "state": "analyzing"}
-
-            # 3b. announcement before tool execution
-            msg = ws.receive_json()
-            assert msg["type"] == "announcement"
 
             # 4. request_screenshot
             msg = ws.receive_json()
@@ -195,12 +200,13 @@ def test_voice_analyze_tool_call(
     mock_analyze.assert_awaited_once_with(
         MOCK_BASE64_PNG, "https://example.com/cod", "Atlantic Cod Fillet"
     )
-    mock_pipeline.assert_called_once()
+    mock_compute.assert_called_once()
 
 
 # ── Test 3: Screenshot timeout ────────────────────────────────────────────
 
 
+@patch("voice_session.ANNOUNCE_DELAY_S", 0.0)
 @patch("voice_session.SCREENSHOT_TIMEOUT_S", 0.1)
 @patch("voice_session.get_genai_client")
 def test_voice_screenshot_timeout(mock_get_client: MagicMock) -> None:
@@ -217,19 +223,15 @@ def test_voice_screenshot_timeout(mock_get_client: MagicMock) -> None:
             msg = ws.receive_json()
             assert msg["type"] == "status"
 
-            # 3. thinking
+            # 3. analyzing status
             msg = ws.receive_json()
             assert msg["type"] == "status"
-
-            # 3b. announcement before tool execution
-            msg = ws.receive_json()
-            assert msg["type"] == "announcement"
 
             # 4. request_screenshot — but we never respond
             msg = ws.receive_json()
             assert msg["type"] == "request_screenshot"
 
-            # 5. After timeout, Gemini gets error response and sends speaking status
+            # 6. After timeout, Gemini gets error response and sends speaking status
             # The tool_response is sent with error, so we should get "speaking"
             msg = ws.receive_json()
             assert msg == {"type": "status", "state": "speaking"}

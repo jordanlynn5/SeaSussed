@@ -9,9 +9,10 @@ from fastapi import WebSocket, WebSocketDisconnect
 from google.genai import types
 
 from agents.screen_analyzer import analyze_screenshot
+from explanation import generate_template_content
 from gemini_client import get_genai_client
-from models import ProductInfo
-from pipeline import run_scoring_pipeline
+from health import get_health_info
+from models import ProductInfo, SustainabilityScore
 from scoring import compute_score
 
 log = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ log = logging.getLogger(__name__)
 LIVE_MODEL = "gemini-live-2.5-flash-native-audio"
 SCREENSHOT_TIMEOUT_S = 8.0
 KEEPALIVE_INTERVAL_S = 30.0
+ANNOUNCE_DELAY_S = 2.0  # seconds to let TTS announcement play before tool runs
 
 def _find_product_url(
     product_name: str, links: list[dict[str, str]]
@@ -47,9 +49,10 @@ def _find_product_url(
 ANALYZE_CURRENT_PRODUCT_TOOL = types.FunctionDeclaration(
     name="analyze_current_product",
     description=(
-        "Capture and analyze the seafood product currently visible on the user's screen. "
-        "Call this when the user mentions or asks about a specific seafood product. "
-        "Returns a sustainability score with grade, explanation, and alternatives."
+        "Capture and analyze the seafood product currently visible on the user's "
+        "screen. Returns a sustainability score with grade, explanation, and "
+        "alternatives. IMPORTANT: You MUST announce to the user what you are "
+        "about to do BEFORE calling this tool. Speak first, then call."
     ),
     parameters=types.Schema(type=types.Type.OBJECT, properties={}, required=[]),
 )
@@ -59,8 +62,9 @@ SEARCH_STORE_TOOL = types.FunctionDeclaration(
     description=(
         "Search the grocery store website the user is currently browsing. "
         "Use this to find sustainable seafood alternatives that are actually "
-        "available for purchase on the site. Returns a list of seafood products "
-        "found in the search results with their sustainability scores."
+        "available for purchase on the site. Returns scored results. "
+        "IMPORTANT: You MUST announce to the user what you are about to search "
+        "for BEFORE calling this tool. Speak first, then call."
     ),
     parameters=types.Schema(
         type=types.Type.OBJECT,
@@ -103,16 +107,31 @@ grocery store.
 
 GREETING (on "[greet ...]" messages):
 You will receive a greeting prompt that includes the score result the user just saw. \
-Respond in 2–3 SHORT sentences:
+Respond in 5–8 sentences:
 1. A warm, grade-appropriate opener (see below).
-2. A brief one-sentence overview of the result — do NOT read numbers or the full \
-breakdown aloud, the score card is already visible in the panel.
-3. End with an invitation: "Want to dive deeper into the results, or any questions \
-I can answer?"
+2. Explain the 2–3 KEY factors behind the score — help the user genuinely \
+UNDERSTAND why this product scored the way it did. Assume they know nothing \
+about seafood sustainability. Teach them something real — go beyond the card. \
+Use plain language, not jargon. Examples: \
+"Wild-caught Alaska salmon comes from one of the best-managed fisheries in the \
+world — they actually count the fish returning to rivers every year and adjust \
+catch limits to keep populations healthy. Plus, the gill net method used here \
+has relatively low bycatch compared to trawling." or \
+"Imported farmed shrimp loses points for a few reasons — shrimp farming in \
+Southeast Asia often involves clearing coastal mangrove forests, which are \
+critical nursery habitat for wild fish. There's also heavy antibiotic use in \
+many farms, and without ASC certification there's no independent verification \
+of their environmental practices."
+3. After giving substance, end with: "I can go deeper on any of that, or I can \
+search this store for other options — what sounds good?"
+
+Do NOT read numbers or the full breakdown aloud — the score card is already visible. \
+Focus on telling the STORY behind the score. Give the user real knowledge they \
+didn't have before, not a summary they can already see on screen.
 
 Grade-appropriate openers:
-- Grade A: Enthusiastic. "Way to go, seafood-savvy shopper!"
-- Grade B: Positive. "Not a bad pick!"
+- Grade A: Enthusiastic. "Great choice!"
+- Grade B: Positive. "This one's pretty solid."
 - Grade C: Gentle. "So, this one's a mixed bag."
 - Grade D: Direct but friendly. "Heads up on this one."
 
@@ -164,14 +183,17 @@ AFTER SEARCH RESULTS — TELL THE USER IMMEDIATELY (critical):
 The tool response includes a "summary" field — follow its instructions. \
 IMMEDIATELY tell the user what you found. Do NOT wait to be asked.
 
-The search tool AUTOMATICALLY opens the best product's page in the user's \
-browser when a URL is available. You do NOT need to call navigate_to_product \
-separately — it's already done. Just tell the user what you found and that \
-you've opened the page: "I found [product name] with a Grade [X]. I've \
-pulled it up for you — want me to analyze it?"
+The search tool ONLY auto-navigates when the result scores HIGHER than the \
+user's current product. If the result is NOT better, you must ASK the user \
+before changing their page: "I found [product name] with a Grade [X] — want \
+me to pull it up so you can take a look?"
 
-If no URL was available (the summary will say so), tell the user the exact \
-product name and how to search for it on the site.
+If the result IS better and the page was already opened, tell the user: \
+"I found [product name] with a Grade [X]. I've pulled it up for you — want \
+me to analyze it?"
+
+NEVER navigate to a product that scores lower than what the user already has \
+without asking first.
 
 NEVER just say "I found some results" or "I searched for tuna" without \
 immediately telling the user WHAT you found. The user cannot see your search \
@@ -197,17 +219,27 @@ DO NOT DO THIS — calling the tool and THEN telling the user:
 The correct order is ALWAYS: speak intent → call tool → speak results.
 
 AFTER RECEIVING A SCORE (from tool call) — respond conversationally:
-- Grade A: Warm and affirming. "Definitely grab it." Then briefly explain WHY \
-  it scores so well — what makes this species, origin, or method sustainable. \
-  Educate the user: "Alaska sockeye salmon scores high because the fishery is \
-  tightly managed with science-based catch limits." Do NOT suggest searching \
-  for something better — they already have a great choice. If they want more, \
-  offer to find similar sustainable options on the site.
-- Grade B: Positive. Brief reason it isn't an A. Ask if they want to know more \
-  about the product or if they'd like to explore other options.
-- Grade C: Honest, not preachy. One-sentence concern. Offer to search: \
-  "Want me to look for a more sustainable option on this site?"
-- Grade D: Clear and direct. Brief reason. Proactively offer to search: \
+Treat the user as a new learner. Explain the 2–3 biggest factors in plain \
+language so they actually LEARN something about sustainable seafood. Give real \
+context — why does this factor matter for the ocean? What's the story behind \
+the score? Respond in 5–8 sentences, not a quick summary.
+- Grade A: Warm and affirming. Explain what makes it great with real detail — \
+  e.g. the fishery management approach, why the population is healthy, what the \
+  certification actually verifies. \
+  Do NOT suggest searching for something better — they already have a great choice. \
+  End with: "Happy to go deeper on any of that, or we can keep shopping."
+- Grade B: Positive. Explain what's good AND the one thing holding it back with \
+  context — e.g. "The species itself is healthy and well-managed, but the fishing \
+  method — bottom trawling — drags heavy nets along the seafloor, which can \
+  damage habitat for other marine life." \
+  End with: "I can tell you more about that, or search for other options here."
+- Grade C: Honest, not preachy. Explain the main concerns with real-world context \
+  — e.g. "This species is overfished in this region — catches have declined \
+  significantly over the last decade" or "Without ASC certification, there's no \
+  independent check on antibiotic use or environmental impact at the farm." \
+  End with: "Want me to dig into any of that, or should I search for a better option?"
+- Grade D: Clear and direct. Explain the key problems so the user understands \
+  the real impact. Proactively offer to search: \
   "I can search this store for a better choice — want me to?"
 
 AFTER SEARCH RESULTS — BE HONEST ABOUT WHAT YOU FOUND (critical):
@@ -230,8 +262,10 @@ do NOT immediately suggest searching for something even better. They already \
 asked for the best and you found it. Instead, share why it scored well and \
 ask if they want you to open the page.
 
-Keep spoken responses SHORT: 2–4 sentences. The full score card is visible in the \
-panel so don't read numbers aloud.
+Keep spoken responses conversational: 5–8 sentences for score explanations, \
+3–5 sentences for follow-ups. The full score card is visible in the panel so \
+don't read numbers aloud — focus on the story, not the stats. Teach the user \
+something they wouldn't know from reading the card.
 
 If the product isn't seafood: "That doesn't look like seafood to me! Let me know \
 when you spot something to check out."
@@ -254,6 +288,16 @@ Never restate information you already said in this conversation. If you already 
 greeted the user and summarized the score, don't say it again. If asked the same \
 question twice, give a shorter answer or say "like I mentioned…" and add new detail. \
 Each response should contain new information, not rehash what was already covered.
+
+HEALTH & FOOD MILES CONTEXT:
+The tool response may include health_advisory (FDA mercury tier like "Best Choice", \
+"Good Choice", or "Choices to Avoid") and food_miles (distance in miles from origin \
+to the user's location). If present, weave them naturally into your response when \
+relevant — don't list them robotically. Examples:
+- "Plus, sardines are a Best Choice for mercury — safe to eat several times a week."
+- "Interesting — this salmon traveled about 4,200 miles from Norway to get to you."
+Only mention food_miles if the distance is notable (over 1000 miles) or the user \
+seems interested in where their food comes from. Always mention high mercury.
 
 HONESTY RULE (hard):
 Never claim certainty about information not visible on the page. If species, origin, \
@@ -279,6 +323,7 @@ class VoiceSession:
 
     def __init__(self, ws: WebSocket) -> None:
         self.ws = ws
+        self.client_ip = ws.client.host if ws.client else ""
         self.screenshot_event = asyncio.Event()
         self.screenshot_data: dict[str, Any] | None = None
         self.search_event = asyncio.Event()
@@ -447,7 +492,7 @@ class VoiceSession:
                             log.info("First audio chunk sent to client")
 
                     if response.tool_call:
-                        # Send specific status so client can show feedback
+                        # Announce tool intent via TTS before executing
                         tool_names = [
                             fc.name
                             for fc in response.tool_call.function_calls
@@ -456,10 +501,14 @@ class VoiceSession:
                             await self.ws.send_json(
                                 {"type": "status", "state": "searching"}
                             )
+                            # Give Gemini's spoken announcement time to
+                            # play before the tool starts executing
+                            await asyncio.sleep(ANNOUNCE_DELAY_S)
                         elif "analyze_current_product" in tool_names:
                             await self.ws.send_json(
                                 {"type": "status", "state": "analyzing"}
                             )
+                            await asyncio.sleep(ANNOUNCE_DELAY_S)
                         elif "navigate_to_product" in tool_names:
                             await self.ws.send_json(
                                 {"type": "status", "state": "navigating"}
@@ -468,37 +517,31 @@ class VoiceSession:
                             await self.ws.send_json(
                                 {"type": "status", "state": "thinking"}
                             )
-                        # Announce tool intent to the user before executing
-                        for fc in response.tool_call.function_calls:
-                            if fc.name == "search_store":
-                                await self.ws.send_json({
-                                    "type": "announcement",
-                                    "text": "Okay, let me search that for you!",
-                                })
-                            elif fc.name == "analyze_current_product":
-                                await self.ws.send_json({
-                                    "type": "announcement",
-                                    "text": "Let me take a look at what's on your screen.",
-                                })
-
                         tool_responses: list[types.FunctionResponse] = []
                         for fc in response.tool_call.function_calls:
-                            if fc.name == "analyze_current_product":
-                                result = (
-                                    await self._handle_analyze_current_product()
+                            try:
+                                if fc.name == "analyze_current_product":
+                                    result = (
+                                        await self._handle_analyze_current_product()
+                                    )
+                                elif fc.name == "search_store":
+                                    query = (fc.args or {}).get("query", "")
+                                    result = await self._handle_search_store(
+                                        query
+                                    )
+                                elif fc.name == "navigate_to_product":
+                                    url = (fc.args or {}).get("url", "")
+                                    result = (
+                                        await self._handle_navigate_to_product(url)
+                                    )
+                                else:
+                                    result = {"error": f"Unknown tool: {fc.name}"}
+                            except Exception as tool_err:
+                                log.error(
+                                    "Tool %s failed: %s", fc.name, tool_err,
+                                    exc_info=True,
                                 )
-                            elif fc.name == "search_store":
-                                query = (fc.args or {}).get("query", "")
-                                result = await self._handle_search_store(
-                                    query
-                                )
-                            elif fc.name == "navigate_to_product":
-                                url = (fc.args or {}).get("url", "")
-                                result = (
-                                    await self._handle_navigate_to_product(url)
-                                )
-                            else:
-                                result = {"error": f"Unknown tool: {fc.name}"}
+                                result = {"error": str(tool_err)}
                             tool_responses.append(
                                 types.FunctionResponse(
                                     id=fc.id,
@@ -506,13 +549,20 @@ class VoiceSession:
                                     response=result,
                                 )
                             )
-                        if tool_responses:
-                            await session.send_tool_response(
-                                function_responses=tool_responses
+                        try:
+                            if tool_responses:
+                                await session.send_tool_response(
+                                    function_responses=tool_responses
+                                )
+                                await self.ws.send_json(
+                                    {"type": "status", "state": "speaking"}
+                                )
+                        except Exception as send_err:
+                            log.error(
+                                "send_tool_response failed: %s", send_err,
+                                exc_info=True,
                             )
-                            await self.ws.send_json(
-                                {"type": "status", "state": "speaking"}
-                            )
+                            return  # session is broken, exit cleanly
 
                     if (
                         response.server_content
@@ -541,6 +591,13 @@ class VoiceSession:
                 pass
 
     async def _handle_analyze_current_product(self) -> dict[str, Any]:
+        """Capture screenshot → Gemini vision → instant Python scoring.
+
+        Uses a fast path: only one Gemini call (vision), then pure Python
+        scoring + template explanation.  Skips web research, Gemini
+        explanation, and Gemini-based alternative identification to stay
+        within the Gemini Live tool-response timeout (~15 s).
+        """
         self.screenshot_event.clear()
         self.screenshot_data = None
 
@@ -572,8 +629,25 @@ class VoiceSession:
                 origin_region=None,
                 certifications=[],
             )
-        score_result = await run_scoring_pipeline(
-            product_info, msg.get("related_products", [])
+
+        # Fast path: pure Python scoring + template explanation (no extra
+        # Gemini calls) — keeps total tool time under ~8 s.
+        breakdown, score, grade = compute_score(product_info)
+        explanation, score_factors = generate_template_content(
+            product_info, breakdown, score, grade
+        )
+        health = get_health_info(product_info.species)
+
+        score_result = SustainabilityScore(
+            score=score,
+            grade=grade,
+            breakdown=breakdown,
+            alternatives=[],
+            alternatives_label="",
+            explanation=explanation,
+            score_factors=score_factors,
+            product_info=product_info,
+            health=health,
         )
 
         # Track current product for search comparisons
@@ -588,16 +662,16 @@ class VoiceSession:
         return {
             "score": score_result.score,
             "grade": score_result.grade,
-            "species": product_info.species,
-            "wild_or_farmed": product_info.wild_or_farmed,
-            "origin_region": product_info.origin_region,
-            "certifications": product_info.certifications,
+            "species": score_result.product_info.species,
+            "wild_or_farmed": score_result.product_info.wild_or_farmed,
+            "origin_region": score_result.product_info.origin_region,
+            "certifications": score_result.product_info.certifications,
+            "fishing_method": score_result.product_info.fishing_method,
             "explanation": score_result.explanation,
-            "alternatives": [
-                {"species": a.species, "score": a.score, "grade": a.grade}
-                for a in score_result.alternatives[:2]
-            ],
-            "not_seafood": not product_info.is_seafood,
+            "not_seafood": not score_result.product_info.is_seafood,
+            "health_advisory": (
+                score_result.health.mercury_category if score_result.health else None
+            ),
         }
 
     async def _handle_search_store(self, query: str) -> dict[str, Any]:
@@ -664,9 +738,14 @@ class VoiceSession:
             scored_products[0] if scored_products else None
         )
 
-        # Auto-navigate to best product if URL available
+        # Only auto-navigate if the result is BETTER than current product
         navigated = False
-        if nav_target and "url" in nav_target:
+        is_better = (
+            nav_target is not None
+            and nav_target["score"] > self.current_score
+            and self.current_score > 0
+        )
+        if is_better and nav_target and "url" in nav_target:
             await self.ws.send_json(
                 {"type": "status", "state": "navigating"}
             )
@@ -674,7 +753,7 @@ class VoiceSession:
                 {"type": "navigate", "url": nav_target["url"]}
             )
             navigated = True
-            log.info("Auto-navigated to: %s", nav_target["url"])
+            log.info("Auto-navigated to better product: %s", nav_target["url"])
 
         # Build explicit summary so Gemini clearly presents results
         if nav_target:
@@ -700,16 +779,25 @@ class VoiceSession:
                     f"Found {len(scored_products)} seafood products. "
                     f"Best option: \"{best_name}\" (Grade {best['grade']}, "
                     f"score {best['score']}/100).{comparison} "
-                    f"The page is already open in the user's browser. "
-                    f"Tell them what you found and offer to analyze it."
+                    f"I've opened this page for you since it scores higher. "
+                    f"The score card is already updating with the full analysis. "
+                    f"Tell them what you found and that the card is updating now."
                 )
-            else:
+            elif is_better and "url" not in best:
                 summary = (
                     f"Found {len(scored_products)} seafood products. "
                     f"Best option: \"{best_name}\" (Grade {best['grade']}, "
                     f"score {best['score']}/100).{comparison} "
                     f"Tell the user to search this site for "
                     f"\"{best_name}\" and click on it."
+                )
+            else:
+                summary = (
+                    f"Found {len(scored_products)} seafood products. "
+                    f"Best option: \"{best_name}\" (Grade {best['grade']}, "
+                    f"score {best['score']}/100).{comparison} "
+                    f"Do NOT navigate automatically. Ask the user if they "
+                    f"want you to open this product page."
                 )
         else:
             summary = (
@@ -733,9 +821,9 @@ class VoiceSession:
             "success": True,
             "url": url,
             "instruction": (
-                "The page is loading now. Tell the user you've opened the "
-                "product page and offer to analyze it: 'I've pulled that up "
-                "for you. Want me to analyze it?'"
+                "The page is loading now and the score card is already "
+                "updating with the full analysis. Tell the user you've "
+                "opened the product page and that the analysis is underway."
             ),
         }
 

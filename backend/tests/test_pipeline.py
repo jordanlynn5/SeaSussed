@@ -181,10 +181,15 @@ async def test_progressive_listing_yields_single_complete() -> None:
 
 
 @pytest.mark.asyncio
+@patch("pipeline.get_user_location", return_value=None)
+@patch("pipeline.research_product", side_effect=lambda p: p)
+@patch("pipeline.get_health_info", return_value=None)
 @patch("pipeline.generate_content", return_value=("Good choice.", []))
 @patch("pipeline.score_alternatives", return_value=([], "Better alternatives"))
 async def test_progressive_single_product_yields_scored_then_complete(
     _mock_alts: AsyncMock, _mock_explain: AsyncMock,
+    _mock_health: AsyncMock, _mock_research: AsyncMock,
+    _mock_geo: AsyncMock,
 ) -> None:
     """Single product emits 'scored' then 'complete'."""
     product = _make_product("Atlantic cod", name="Fresh Cod")
@@ -192,13 +197,18 @@ async def test_progressive_single_product_yields_scored_then_complete(
     events = [e async for e in analyze_page_progressive(pa, [])]
 
     assert len(events) == 2
-    # Phase 1: scored
+    # Phase 1: scored (with template explanation)
     assert events[0]["phase"] == "scored"
     assert events[0]["product_info"]["species"] == "Atlantic cod"
     assert "score" in events[0]
     assert "grade" in events[0]
     assert "breakdown" in events[0]
-    # Phase 2: complete
+    # Template explanation included in scored phase
+    assert "explanation" in events[0]
+    assert len(events[0]["explanation"]) > 10
+    assert "score_factors" in events[0]
+    assert len(events[0]["score_factors"]) == 4
+    # Phase 2: complete (with Gemini explanation)
     assert events[1]["phase"] == "complete"
     assert events[1]["page_type"] == "single_product"
     assert "result" in events[1]

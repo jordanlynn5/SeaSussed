@@ -106,8 +106,10 @@ async function capturePageData(tabId, url) {
       }
       const rows = document.querySelectorAll(
         '#productDetails_techSpec_section_1 tr, #detailBullets_feature_div li, ' +
-        '#productDetails_detailBullets_sections1 tr, .product-details tr, ' +
-        '[class*="ProductDetail"] tr, [class*="product-detail"] li'
+        '#productDetails_detailBullets_sections1 tr, #productDetails_db_sections tr, ' +
+        '#productOverview_feature_div tr, .product-details tr, ' +
+        '[class*="ProductDetail"] tr, [class*="product-detail"] li, ' +
+        '.a-expander-content tr'
       );
       if (rows.length) {
         sections.push('DETAILS: ' + [...rows].map(e => e.innerText.trim()).filter(Boolean).join('\n'));

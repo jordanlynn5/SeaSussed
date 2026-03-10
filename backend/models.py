@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AnalyzeRequest(BaseModel):
@@ -64,6 +64,31 @@ class PageProduct(BaseModel):
     breakdown: ScoreBreakdown
 
 
+class HealthInfo(BaseModel):
+    mercury_category: str  # "Best Choice" | "Good Choice" | "Choices to Avoid"
+    mercury_ppm: float | None  # avg ppm, None if tier-only
+    omega3_note: str  # "Rich in omega-3s" | "Moderate omega-3s" | ""
+    serving_advice: str  # "FDA recommends 2-3 servings/week"
+    health_grade: Literal["A", "B", "C", "D"]
+
+
+class UserLocation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    city: str
+    region: str
+    country: str
+    lat: float
+    lon: float
+
+
+class FoodMiles(BaseModel):
+    distance_miles: int  # e.g., 4213
+    origin: str  # e.g., "Norway"
+    destination: str  # e.g., "Chicago, IL"
+    source: str = "Wolfram Alpha"
+
+
 class SustainabilityScore(BaseModel):
     score: int
     grade: Literal["A", "B", "C", "D"]
@@ -73,6 +98,8 @@ class SustainabilityScore(BaseModel):
     explanation: str  # 2–3 sentences mentioning visible vs unknown fields
     score_factors: list[ScoreFactor]  # per-category educational content
     product_info: ProductInfo
+    health: HealthInfo | None = None
+    food_miles: FoodMiles | None = None
 
 
 class AnalyzeResponse(BaseModel):

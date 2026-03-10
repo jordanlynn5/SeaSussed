@@ -158,9 +158,6 @@ class VoiceClient {
       case 'score_result':
         this.onScoreResult(msg.score);
         break;
-      case 'announcement':
-        this._speakAnnouncement(msg.text);
-        break;
       case 'status':
         console.log('[SeaSussed] Status from server:', msg.state);
         if (msg.state === 'listening') this._receivedFirstAudio = false;
@@ -288,18 +285,23 @@ class VoiceClient {
     const tab = tabs[0];
     if (!tab?.id || !url) return;
     await chrome.tabs.update(tab.id, { url });
-  }
 
-  _speakAnnouncement(text) {
-    try {
-      speechSynthesis.cancel(); // clear any queued utterances
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.rate = 1.1;
-      utt.volume = 0.8;
-      speechSynthesis.speak(utt);
-    } catch (err) {
-      console.warn('[SeaSussed] SpeechSynthesis unavailable:', err.message);
-    }
+    // Wait for the new page to finish loading, then auto-analyze
+    const tabId = tab.id;
+    const onUpdated = (updatedId, info) => {
+      if (updatedId === tabId && info.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        clearTimeout(timeout);
+        // Let the page DOM settle before capturing (SPAs may need a moment)
+        setTimeout(() => {
+          if (typeof triggerAnalyze === 'function') triggerAnalyze();
+        }, 1500);
+      }
+    };
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+    }, 15000);
+    chrome.tabs.onUpdated.addListener(onUpdated);
   }
 
   _waitForOpen() {
