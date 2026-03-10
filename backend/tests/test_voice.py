@@ -162,10 +162,6 @@ def test_voice_analyze_tool_call(
             msg = ws.receive_json()
             assert msg == {"type": "status", "state": "analyzing"}
 
-            # 3b. announcement before tool execution
-            msg = ws.receive_json()
-            assert msg["type"] == "announcement"
-
             # 4. request_screenshot
             msg = ws.receive_json()
             assert msg["type"] == "request_screenshot"
@@ -220,10 +216,6 @@ def test_voice_screenshot_timeout(mock_get_client: MagicMock) -> None:
             # 3. thinking
             msg = ws.receive_json()
             assert msg["type"] == "status"
-
-            # 3b. announcement before tool execution
-            msg = ws.receive_json()
-            assert msg["type"] == "announcement"
 
             # 4. request_screenshot — but we never respond
             msg = ws.receive_json()

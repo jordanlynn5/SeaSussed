@@ -66,6 +66,10 @@ For each seafood product, extract from ANY of the provided images or text:
 - certifications: list of certification marks visible in any image or
   mentioned in text (MSC, ASC, BAP, GlobalG.A.P., FOS, ASMI,
   Responsibly Farmed, Sustainably Sourced, etc.)
+  IMPORTANT: Look for chain-of-custody codes like "MSC-C-12345" or
+  "ASC-C-12345" — these confirm certification even without a logo.
+  Also look for certification statements like "certified to the MSC's
+  standard" or "www.msc.org" in fine print on back labels.
 - product_name: the full product title/name — null if not visible
 
 For "single_product": extract one product with full detail.

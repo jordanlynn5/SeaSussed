@@ -181,10 +181,15 @@ async def test_progressive_listing_yields_single_complete() -> None:
 
 
 @pytest.mark.asyncio
+@patch("pipeline.get_carbon_footprint", return_value=None)
+@patch("pipeline.research_product", side_effect=lambda p: p)
+@patch("pipeline.get_health_info", return_value=None)
 @patch("pipeline.generate_content", return_value=("Good choice.", []))
 @patch("pipeline.score_alternatives", return_value=([], "Better alternatives"))
 async def test_progressive_single_product_yields_scored_then_complete(
     _mock_alts: AsyncMock, _mock_explain: AsyncMock,
+    _mock_health: AsyncMock, _mock_research: AsyncMock,
+    _mock_carbon: AsyncMock,
 ) -> None:
     """Single product emits 'scored' then 'complete'."""
     product = _make_product("Atlantic cod", name="Fresh Cod")

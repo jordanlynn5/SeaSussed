@@ -64,6 +64,20 @@ class PageProduct(BaseModel):
     breakdown: ScoreBreakdown
 
 
+class HealthInfo(BaseModel):
+    mercury_category: str  # "Best Choice" | "Good Choice" | "Choices to Avoid"
+    mercury_ppm: float | None  # avg ppm, None if tier-only
+    omega3_note: str  # "Rich in omega-3s" | "Moderate omega-3s" | ""
+    serving_advice: str  # "FDA recommends 2-3 servings/week"
+    health_grade: Literal["A", "B", "C", "D"]
+
+
+class CarbonFootprint(BaseModel):
+    co2_kg_per_serving: float  # kg CO₂e per ~113g (4oz) serving
+    comparison_text: str  # "Beef produces ~6.6 kg CO₂ per serving"
+    source: str = "Wolfram Alpha"
+
+
 class SustainabilityScore(BaseModel):
     score: int
     grade: Literal["A", "B", "C", "D"]
@@ -73,6 +87,8 @@ class SustainabilityScore(BaseModel):
     explanation: str  # 2–3 sentences mentioning visible vs unknown fields
     score_factors: list[ScoreFactor]  # per-category educational content
     product_info: ProductInfo
+    health: HealthInfo | None = None
+    carbon: CarbonFootprint | None = None
 
 
 class AnalyzeResponse(BaseModel):

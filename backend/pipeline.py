@@ -4,6 +4,7 @@ from typing import Any
 
 from alternatives import score_alternatives
 from explanation import generate_content
+from health import get_health_info
 from models import (
     AnalyzeResponse,
     PageAnalysis,
@@ -12,18 +13,36 @@ from models import (
     ScoreBreakdown,
     SustainabilityScore,
 )
+from research import research_product
 from scoring import compute_score
+from wolfram import get_carbon_footprint
 
 
 async def run_scoring_pipeline(
     product_info: ProductInfo, related_products: list[str]
 ) -> SustainabilityScore:
-    breakdown, score, grade = compute_score(product_info)
-    # Run the two Gemini calls concurrently — they are fully independent.
-    (alternatives, alts_label), (explanation, score_factors) = await asyncio.gather(
-        asyncio.to_thread(score_alternatives, related_products, product_info, score, grade),
-        asyncio.to_thread(generate_content, product_info, breakdown, score, grade),
+    # Step 1: Enrich via web research (only if fields missing)
+    enriched = await asyncio.to_thread(research_product, product_info)
+
+    # Step 2: Score with enriched data
+    breakdown, score, grade = compute_score(enriched)
+
+    # Step 3: Health lookup (instant, static)
+    health = get_health_info(enriched.species)
+
+    # Step 4: Run alternatives + explanation + carbon in parallel
+    (alternatives, alts_label), (explanation, score_factors), carbon = (
+        await asyncio.gather(
+            asyncio.to_thread(
+                score_alternatives, related_products, enriched, score, grade
+            ),
+            asyncio.to_thread(
+                generate_content, enriched, breakdown, score, grade
+            ),
+            asyncio.to_thread(get_carbon_footprint, enriched.species or ""),
+        )
     )
+
     return SustainabilityScore(
         score=score,
         grade=grade,
@@ -32,7 +51,9 @@ async def run_scoring_pipeline(
         alternatives_label=alts_label,
         explanation=explanation,
         score_factors=score_factors,
-        product_info=product_info,
+        product_info=enriched,
+        health=health,
+        carbon=carbon,
     )
 
 
@@ -148,9 +169,14 @@ async def analyze_page_progressive(
 
     # Single product → progressive: score first, then enrichment
     product = seafood_products[0]
-    breakdown, score, grade = compute_score(product)
 
-    # Phase 1: immediate score
+    # Phase 0: instant health (static lookup)
+    health = get_health_info(product.species)
+    if health:
+        yield {"phase": "health", "health": health.model_dump()}
+
+    # Phase 1: initial score (before research)
+    breakdown, score, grade = compute_score(product)
     yield {
         "phase": "scored",
         "product_info": product.model_dump(),
@@ -159,10 +185,36 @@ async def analyze_page_progressive(
         "breakdown": breakdown.model_dump(),
     }
 
-    # Phase 2: alternatives + explanation (2-3s)
+    # Phase 1.5: research + carbon in parallel
+    enriched_product, carbon = await asyncio.gather(
+        asyncio.to_thread(research_product, product),
+        asyncio.to_thread(get_carbon_footprint, product.species or ""),
+    )
+
+    if carbon:
+        yield {"phase": "carbon", "carbon": carbon.model_dump()}
+
+    # If research found new data, recompute score
+    enriched_changed = enriched_product is not product
+    if enriched_changed:
+        breakdown, score, grade = compute_score(enriched_product)
+        yield {
+            "phase": "enriched",
+            "product_info": enriched_product.model_dump(),
+            "score": score,
+            "grade": grade,
+            "breakdown": breakdown.model_dump(),
+        }
+
+    # Phase 2: alternatives + explanation (use enriched data)
+    final_product = enriched_product if enriched_changed else product
     (alternatives, alts_label), (explanation, score_factors) = await asyncio.gather(
-        asyncio.to_thread(score_alternatives, related_products, product, score, grade),
-        asyncio.to_thread(generate_content, product, breakdown, score, grade),
+        asyncio.to_thread(
+            score_alternatives, related_products, final_product, score, grade
+        ),
+        asyncio.to_thread(
+            generate_content, final_product, breakdown, score, grade
+        ),
     )
 
     full_result = SustainabilityScore(
@@ -173,7 +225,9 @@ async def analyze_page_progressive(
         alternatives_label=alts_label,
         explanation=explanation,
         score_factors=score_factors,
-        product_info=product,
+        product_info=final_product,
+        health=health,
+        carbon=carbon,
     )
     yield {
         "phase": "complete",
