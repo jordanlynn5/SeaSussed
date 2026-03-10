@@ -181,11 +181,11 @@ Cloud Run deploy command gains: `WOLFRAM_APP_ID` in `--set-env-vars`.
 
 | Phase | Name | Files Created/Modified | Batch |
 |---|---|---|---|
-| 1 | Health lookup module | `health.py`, `tests/test_health.py`, `models.py` | [batch-eligible] |
-| 2 | Wolfram carbon module | `wolfram.py`, `tests/test_wolfram.py`, `models.py` | [batch-eligible] |
-| 3 | Web research module | `research.py`, `tests/test_research.py` | [batch-eligible] |
-| 4 | Pipeline integration | `pipeline.py`, `main.py`, `voice_session.py`, `scoring.py` | No (needs 1-3) |
-| 5 | Extension UI | `sidepanel.html`, `sidepanel.js` | No (needs 4 API contract) |
+| 1 | Health lookup module | `health.py`, `tests/test_health.py`, `models.py` | ✅ complete |
+| 2 | Wolfram carbon module | `wolfram.py`, `tests/test_wolfram.py`, `models.py` | ✅ complete |
+| 3 | Web research module | `research.py`, `tests/test_research.py` | ✅ complete |
+| 4 | Pipeline integration | `pipeline.py`, `main.py`, `voice_session.py`, `scoring.py` | ✅ complete |
+| 5 | Extension UI | `sidepanel.html`, `sidepanel.js` | ✅ complete |
 
 Phases 1, 2, and 3 are independent — no shared file modifications (models.py additions
 are non-overlapping fields). They can run in parallel via `/batch`.

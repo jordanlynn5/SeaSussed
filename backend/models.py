@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class AnalyzeRequest(BaseModel):
@@ -72,9 +72,20 @@ class HealthInfo(BaseModel):
     health_grade: Literal["A", "B", "C", "D"]
 
 
-class CarbonFootprint(BaseModel):
-    co2_kg_per_serving: float  # kg CO₂e per ~113g (4oz) serving
-    comparison_text: str  # "Beef produces ~6.6 kg CO₂ per serving"
+class UserLocation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    city: str
+    region: str
+    country: str
+    lat: float
+    lon: float
+
+
+class FoodMiles(BaseModel):
+    distance_miles: int  # e.g., 4213
+    origin: str  # e.g., "Norway"
+    destination: str  # e.g., "Chicago, IL"
     source: str = "Wolfram Alpha"
 
 
@@ -88,7 +99,7 @@ class SustainabilityScore(BaseModel):
     score_factors: list[ScoreFactor]  # per-category educational content
     product_info: ProductInfo
     health: HealthInfo | None = None
-    carbon: CarbonFootprint | None = None
+    food_miles: FoodMiles | None = None
 
 
 class AnalyzeResponse(BaseModel):

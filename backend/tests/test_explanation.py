@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from explanation import generate_content
+from explanation import generate_content, generate_template_content
 from models import ProductInfo, ScoreBreakdown
 
 _HAS_CREDENTIALS = bool(os.environ.get("GOOGLE_CLOUD_PROJECT"))
@@ -93,6 +93,87 @@ def test_grade_d_produces_score_factors() -> None:
     )
     _, score_factors = generate_content(product, breakdown, 39, "D")
     assert len(score_factors) == 4
+
+
+def test_template_returns_valid_structure() -> None:
+    """generate_template_content returns (str, 4 ScoreFactors) with no API calls."""
+    product = ProductInfo(
+        is_seafood=True,
+        species="Atlantic cod",
+        wild_or_farmed="wild",
+        fishing_method="Trawl",
+        origin_region="North Atlantic",
+        certifications=["MSC"],
+    )
+    breakdown = ScoreBreakdown(
+        biological=15.0, practices=18.0, management=25.0, ecological=16.0
+    )
+    explanation, factors = generate_template_content(product, breakdown, 74, "B")
+    assert isinstance(explanation, str)
+    assert "cod" in explanation.lower()
+    assert "74/100" in explanation
+    assert len(factors) == 4
+    for f in factors:
+        assert f.score >= 0
+        assert f.max_score > 0
+        assert len(f.explanation) > 5
+
+
+def test_template_grade_a_has_no_tips() -> None:
+    """Template grade A products have no tips."""
+    product = ProductInfo(
+        is_seafood=True,
+        species="sockeye salmon",
+        wild_or_farmed="wild",
+        fishing_method="Purse seine",
+        origin_region="Alaska",
+        certifications=["MSC"],
+    )
+    breakdown = ScoreBreakdown(
+        biological=16.0, practices=20.0, management=28.0, ecological=20.0
+    )
+    _, factors = generate_template_content(product, breakdown, 84, "A")
+    for f in factors:
+        assert f.tip is None, f"Grade A should have no tips: {f.category}"
+
+
+def test_template_grade_d_has_tips() -> None:
+    """Template grade D products have tips for weak categories."""
+    product = ProductInfo(
+        is_seafood=True,
+        species="bluefin tuna",
+        wild_or_farmed="unknown",
+        fishing_method=None,
+        origin_region=None,
+        certifications=[],
+    )
+    breakdown = ScoreBreakdown(
+        biological=5.0, practices=8.0, management=5.0, ecological=8.0
+    )
+    explanation, factors = generate_template_content(product, breakdown, 26, "D")
+    # Should mention unknown fields
+    assert "not visible" in explanation.lower() or "unknown" in explanation.lower()
+    # At least some factors should have tips
+    tips = [f.tip for f in factors if f.tip is not None]
+    assert len(tips) > 0
+
+
+def test_template_mentions_certifications() -> None:
+    """Template mentions visible certifications in management factor."""
+    product = ProductInfo(
+        is_seafood=True,
+        species="salmon",
+        wild_or_farmed="wild",
+        fishing_method=None,
+        origin_region=None,
+        certifications=["MSC", "ASMI"],
+    )
+    breakdown = ScoreBreakdown(
+        biological=14.0, practices=12.0, management=22.0, ecological=15.0
+    )
+    _, factors = generate_template_content(product, breakdown, 63, "B")
+    mgmt = [f for f in factors if f.category == "Management & Regulation"][0]
+    assert "MSC" in mgmt.explanation
 
 
 @pytest.mark.skipif(

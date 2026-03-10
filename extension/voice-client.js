@@ -285,6 +285,23 @@ class VoiceClient {
     const tab = tabs[0];
     if (!tab?.id || !url) return;
     await chrome.tabs.update(tab.id, { url });
+
+    // Wait for the new page to finish loading, then auto-analyze
+    const tabId = tab.id;
+    const onUpdated = (updatedId, info) => {
+      if (updatedId === tabId && info.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        clearTimeout(timeout);
+        // Let the page DOM settle before capturing (SPAs may need a moment)
+        setTimeout(() => {
+          if (typeof triggerAnalyze === 'function') triggerAnalyze();
+        }, 1500);
+      }
+    };
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+    }, 15000);
+    chrome.tabs.onUpdated.addListener(onUpdated);
   }
 
   _waitForOpen() {

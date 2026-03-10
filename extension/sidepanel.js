@@ -55,6 +55,12 @@ const CERT_DEFINITIONS = {
 let currentResult = null;
 let voiceClient = null;
 let pendingVoiceData = null; // held while mic-permission popup is open
+let _pendingScoreReveal = null; // held until 'complete' phase arrives
+
+// Build animation timers (cancelled if new data arrives mid-animation)
+let _buildTimers = [];
+function _scheduleBuild(fn, delay) { _buildTimers.push(setTimeout(fn, delay)); }
+function _cancelBuild() { _buildTimers.forEach(clearTimeout); _buildTimers = []; }
 
 // Receive grant from mic-permission.html popup and start voice
 chrome.runtime.onMessage.addListener((msg) => {
@@ -215,11 +221,15 @@ async function startVoiceAfterResult(data) {
 
 // ── Analyze ──
 async function triggerAnalyze() {
+  _cancelBuild();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
 
   showView('view-loading');
   setLoadingStatus('Capturing page data…');
+  // Reset health + food miles cards for new analysis
+  document.getElementById('health-card').style.display = 'none';
+  document.getElementById('food-miles-card').style.display = 'none';
 
   try {
     // Step 1: Capture screenshot + gallery images + DOM text via background.js
@@ -285,15 +295,99 @@ function setLoadingStatus(text) {
   if (el) el.textContent = text;
 }
 
+function renderHealthCard(health) {
+  if (!health) return;
+  const card = document.getElementById('health-card');
+  const body = document.getElementById('health-card-body');
+
+  const gradeColors = { A: '#16a34a', B: '#ca8a04', C: '#ea580c', D: '#dc2626' };
+  const color = gradeColors[health.health_grade] || '#6b7280';
+
+  let html = `<div style="font-weight:600; color:${color}; margin-bottom:4px;">`;
+  html += `${health.mercury_category}`;
+  if (health.mercury_ppm != null) {
+    html += ` <span style="font-weight:400; color:#9ca3af;">(${health.mercury_ppm} ppm mercury)</span>`;
+  }
+  html += `</div>`;
+  if (health.omega3_note) {
+    html += `<div>${health.omega3_note}</div>`;
+  }
+  if (health.serving_advice) {
+    html += `<div style="color:#6b7280; font-size:12px; margin-top:2px;">${health.serving_advice}</div>`;
+  }
+  body.innerHTML = html;
+  card.style.display = '';
+}
+
+function renderFoodMilesCard(foodMiles) {
+  if (!foodMiles) return;
+  const card = document.getElementById('food-miles-card');
+  const body = document.getElementById('food-miles-card-body');
+
+  const distFormatted = foodMiles.distance_miles.toLocaleString();
+
+  let html = `<div style="font-weight:600; margin-bottom:4px;">`;
+  html += `~${distFormatted} miles`;
+  html += `</div>`;
+  html += `<div style="color:#6b7280; font-size:12px;">`;
+  html += `${foodMiles.origin} → ${foodMiles.destination}`;
+  html += `</div>`;
+  html += `<div style="color:#9ca3af; font-size:11px; margin-top:4px;">Source: ${foodMiles.source}</div>`;
+  body.innerHTML = html;
+  card.style.display = '';
+}
+
 function handleSSEEvent(data, pageData) {
   if (data.phase === 'analyzing') {
     setLoadingStatus('Analyzing all images…');
     return;
   }
 
+  if (data.phase === 'health') {
+    renderHealthCard(data.health);
+    return;
+  }
+
   if (data.phase === 'scored') {
     // Progressive phase 1: show product info + score immediately
     renderScorePhase(data);
+    return;
+  }
+
+  if (data.phase === 'food_miles') {
+    renderFoodMilesCard(data.food_miles);
+    return;
+  }
+
+  if (data.phase === 'enriched') {
+    _cancelBuild();
+    // Research found new data — update score card
+    const { score, grade, breakdown, product_info } = data;
+    document.getElementById('grade-circle').textContent = grade;
+    document.getElementById('grade-circle').style.background = GRADE_COLORS[grade];
+    document.getElementById('grade-emoji-label').textContent = GRADE_LABELS[grade];
+    document.getElementById('grade-score-text').textContent = `${score}/100`;
+    // Flash the badge to indicate update
+    const badge = document.getElementById('grade-badge');
+    badge.classList.remove('fade-in');
+    void badge.offsetWidth; // force reflow
+    badge.classList.add('fade-in');
+    // Update extraction tags with enriched data
+    const tagsEl = document.getElementById('extraction-tags');
+    tagsEl.innerHTML = '';
+    if (product_info.species)
+      tagsEl.innerHTML += `<span class="tag">${product_info.species}</span>`;
+    if (product_info.wild_or_farmed !== 'unknown')
+      tagsEl.innerHTML += `<span class="tag">${product_info.wild_or_farmed}</span>`;
+    if (product_info.origin_region)
+      tagsEl.innerHTML += `<span class="tag">${product_info.origin_region}</span>`;
+    if (product_info.fishing_method)
+      tagsEl.innerHTML += `<span class="tag">${product_info.fishing_method}</span>`;
+    product_info.certifications?.forEach(c =>
+      tagsEl.innerHTML += `<span class="tag cert" data-cert="${c}">${c}</span>`);
+    tagsEl.querySelectorAll('.tag.cert').forEach(tag => {
+      tag.addEventListener('click', (e) => showCertPopover(tag.dataset.cert, e));
+    });
     return;
   }
 
@@ -310,77 +404,189 @@ function handleSSEEvent(data, pageData) {
       currentResult = data.result;
       renderResult(data.result);
     }
+    // Now that all results are in, reveal the score + grade
+    if (_pendingScoreReveal) {
+      const { score, grade, color } = _pendingScoreReveal;
+      _pendingScoreReveal = null;
+      _animateScoreReveal(score, grade, color);
+    }
   }
 }
 
-// ── Progressive Phase 1: Score + product info (before alternatives/explanation) ──
+// ── Progressive Phase 1: Animated score build ──
 function renderScorePhase(data) {
+  _cancelBuild();
   const { score, grade, breakdown, product_info } = data;
   const color = GRADE_COLORS[grade];
 
-  // Grade badge
-  document.getElementById('grade-circle').textContent = grade;
-  document.getElementById('grade-circle').style.background = color;
-  document.getElementById('grade-emoji-label').textContent = GRADE_LABELS[grade];
-  document.getElementById('grade-score-text').textContent = `${score}/100`;
+  // Grade badge — start gray with "?" (score revealed at the end)
+  const gradeCircle = document.getElementById('grade-circle');
+  gradeCircle.textContent = '?';
+  gradeCircle.style.transition = 'none';
+  gradeCircle.style.background = '#d1d5db';
+  document.getElementById('grade-emoji-label').textContent = 'Building your score\u2026';
+  document.getElementById('grade-score-text').innerHTML = '&nbsp;';
 
-  // Extraction tags
+  // Clear content areas
   const tagsEl = document.getElementById('extraction-tags');
   tagsEl.innerHTML = '';
-  if (product_info.species)
-    tagsEl.innerHTML += `<span class="tag">${product_info.species}</span>`;
-  if (product_info.wild_or_farmed !== 'unknown')
-    tagsEl.innerHTML += `<span class="tag">${product_info.wild_or_farmed}</span>`;
-  if (product_info.origin_region)
-    tagsEl.innerHTML += `<span class="tag">${product_info.origin_region}</span>`;
-  if (product_info.fishing_method)
-    tagsEl.innerHTML += `<span class="tag">${product_info.fishing_method}</span>`;
-  product_info.certifications?.forEach(c =>
-    tagsEl.innerHTML += `<span class="tag cert" data-cert="${c}">${c}</span>`);
-
-  tagsEl.querySelectorAll('.tag.cert').forEach(tag => {
-    tag.addEventListener('click', (e) => showCertPopover(tag.dataset.cert, e));
-  });
-
-  // Placeholder explanation while we wait for Phase 2
   document.getElementById('explanation-text').textContent = '';
+  document.getElementById('breakdown-rows').innerHTML = '';
 
-  // Simple breakdown bars (will be replaced by expandable rows in Phase 2)
-  const practicesLabel = product_info.wild_or_farmed === 'farmed'
-    ? 'Aquaculture Practices' : 'Fishing Practices';
-  const rows = [
-    ['Biological Status', breakdown.biological, BREAKDOWN_MAX.biological],
-    [practicesLabel,      breakdown.practices,  BREAKDOWN_MAX.practices],
-    ['Management',        breakdown.management, BREAKDOWN_MAX.management],
-    ['Ecological',        breakdown.ecological, BREAKDOWN_MAX.ecological],
-  ];
-  document.getElementById('breakdown-rows').innerHTML = rows.map(([label, val, max]) => {
-    const pct = Math.round((val / max) * 100);
-    const barColor = pct >= 70 ? '#22c55e' : pct >= 45 ? '#eab308' : '#ef4444';
-    return `
-      <div class="score-row">
-        <span class="score-label">${label}</span>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <div class="score-bar-wrap">
-            <div class="score-bar" style="width:${pct}%; background:${barColor};"></div>
-          </div>
-          <span class="score-val">${Math.round(val)}/${max}</span>
-        </div>
-      </div>`;
-  }).join('');
+  // Collect tags
+  const tags = [];
+  if (product_info.species)
+    tags.push({ text: product_info.species, cls: 'tag' });
+  if (product_info.wild_or_farmed !== 'unknown')
+    tags.push({ text: product_info.wild_or_farmed, cls: 'tag' });
+  if (product_info.origin_region)
+    tags.push({ text: product_info.origin_region, cls: 'tag' });
+  if (product_info.fishing_method)
+    tags.push({ text: product_info.fishing_method, cls: 'tag' });
+  (product_info.certifications || []).forEach(c =>
+    tags.push({ text: c, cls: 'tag cert', cert: c }));
 
-  // Show placeholder for alternatives while Phase 2 loads
+  // Alternatives placeholder
   const altsCard = document.getElementById('alternatives-card');
   altsCard.style.display = 'block';
-  document.getElementById('alternatives-title').textContent = 'Finding alternatives…';
+  document.getElementById('alternatives-title').textContent = 'Finding alternatives\u2026';
   document.getElementById('alternatives-list').innerHTML =
-    '<div class="enriching-placeholder"><div class="spin-sm"></div>Loading alternatives &amp; explanation…</div>';
+    '<div class="enriching-placeholder"><div class="spin-sm"></div>Loading alternatives &amp; explanation\u2026</div>';
   document.getElementById('category-page-tip').style.display = 'none';
-
-  // Hide not-right link until we have the full result
   document.getElementById('not-right-link').style.display = 'none';
 
   showView('view-result');
+
+  // ── ANIMATION SEQUENCE ──
+  const TAG_STAGGER = 120;
+  const EXPL_DELAY = tags.length * TAG_STAGGER + 250;
+  const BAR_START = EXPL_DELAY + 300;
+  const BAR_STAGGER = 300;
+
+  // Step 1: Slide in tags one at a time
+  tags.forEach((tag, i) => {
+    _scheduleBuild(() => {
+      const span = document.createElement('span');
+      span.className = `${tag.cls} tag-animate`;
+      span.textContent = tag.text;
+      if (tag.cert) {
+        span.dataset.cert = tag.cert;
+        span.addEventListener('click', (e) => showCertPopover(tag.cert, e));
+      }
+      tagsEl.appendChild(span);
+    }, i * TAG_STAGGER);
+  });
+
+  // Step 2: Fade in template explanation
+  _scheduleBuild(() => {
+    const el = document.getElementById('explanation-text');
+    el.textContent = data.explanation || '';
+    el.classList.remove('fade-in');
+    void el.offsetWidth;
+    el.classList.add('fade-in');
+  }, EXPL_DELAY);
+
+  // Step 3: Build breakdown bars one at a time
+  const breakdownEl = document.getElementById('breakdown-rows');
+  const factors = data.score_factors && data.score_factors.length > 0
+    ? data.score_factors : null;
+  const barItems = factors
+    ? factors.map(f => ({
+        label: f.category, val: f.score, max: f.max_score,
+        explanation: f.explanation, tip: f.tip,
+      }))
+    : [
+        { label: 'Biological Status', val: breakdown.biological, max: 20 },
+        { label: product_info.wild_or_farmed === 'farmed'
+            ? 'Aquaculture Practices' : 'Fishing Practices',
+          val: breakdown.practices, max: 25 },
+        { label: 'Management', val: breakdown.management, max: 30 },
+        { label: 'Ecological', val: breakdown.ecological, max: 25 },
+      ];
+
+  barItems.forEach((item, i) => {
+    _scheduleBuild(() => {
+      const pct = Math.round((item.val / item.max) * 100);
+      const barColor = pct >= 70 ? '#22c55e' : pct >= 45 ? '#eab308' : '#ef4444';
+      const row = document.createElement('div');
+      row.className = 'fade-in';
+
+      if (item.explanation) {
+        row.classList.add('breakdown-row');
+        const tipHtml = item.tip
+          ? `<div class="breakdown-tip">\u{1f4a1} ${item.tip}</div>` : '';
+        row.innerHTML = `
+          <div class="breakdown-header">
+            <span class="score-label">${item.label}</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <div class="score-bar-wrap">
+                <div class="score-bar" style="width:0%; background:${barColor};"></div>
+              </div>
+              <span class="score-val">${Math.round(item.val)}/${item.max}</span>
+              <span class="breakdown-chevron">\u25B6</span>
+            </div>
+          </div>
+          <div class="breakdown-detail">
+            ${item.explanation}
+            ${tipHtml}
+          </div>`;
+        row.querySelector('.breakdown-header').addEventListener('click', () => {
+          row.classList.toggle('open');
+        });
+      } else {
+        row.classList.add('score-row');
+        row.innerHTML = `
+          <span class="score-label">${item.label}</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div class="score-bar-wrap">
+              <div class="score-bar" style="width:0%; background:${barColor};"></div>
+            </div>
+            <span class="score-val">${Math.round(item.val)}/${item.max}</span>
+          </div>`;
+      }
+
+      breakdownEl.appendChild(row);
+      // Animate bar from 0 to final width
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          row.querySelector('.score-bar').style.width = `${pct}%`;
+        });
+      });
+    }, BAR_START + i * BAR_STAGGER);
+  });
+
+  // Score reveal is deferred until 'complete' phase arrives
+  _pendingScoreReveal = { score, grade, color };
+}
+
+function _animateScoreReveal(targetScore, grade, color) {
+  const gradeCircle = document.getElementById('grade-circle');
+  const scoreText = document.getElementById('grade-score-text');
+  const gradeLabel = document.getElementById('grade-emoji-label');
+
+  // Grade circle: pop in with final color + letter
+  gradeCircle.style.transition = 'background 0.4s ease';
+  gradeCircle.style.background = color;
+  gradeCircle.textContent = grade;
+  gradeCircle.classList.remove('grade-pop');
+  void gradeCircle.offsetWidth;
+  gradeCircle.classList.add('grade-pop');
+
+  // Count up score (ease-out cubic)
+  const duration = 500;
+  const start = performance.now();
+  function tick(now) {
+    const t = Math.min((now - start) / duration, 1);
+    const eased = 1 - Math.pow(1 - t, 3);
+    scoreText.textContent = `${Math.round(eased * targetScore)}/100`;
+    if (t < 1) {
+      requestAnimationFrame(tick);
+    } else {
+      scoreText.textContent = `${targetScore}/100`;
+      gradeLabel.textContent = GRADE_LABELS[grade];
+    }
+  }
+  requestAnimationFrame(tick);
 }
 
 document.getElementById('analyze-btn')?.addEventListener('click', triggerAnalyze);
@@ -478,15 +684,18 @@ function renderProductList(products) {
 
 // ── Render Result ──
 function renderResult(data) {
+  _cancelBuild();
   const { score, grade, breakdown, alternatives, alternatives_label,
           explanation, score_factors, product_info } = data;
   const color = GRADE_COLORS[grade];
 
-  // Grade badge
-  document.getElementById('grade-circle').textContent = grade;
-  document.getElementById('grade-circle').style.background = color;
-  document.getElementById('grade-emoji-label').textContent = GRADE_LABELS[grade];
-  document.getElementById('grade-score-text').textContent = `${score}/100`;
+  // Grade badge — skip if pending reveal will animate it
+  if (!_pendingScoreReveal) {
+    document.getElementById('grade-circle').textContent = grade;
+    document.getElementById('grade-circle').style.background = color;
+    document.getElementById('grade-emoji-label').textContent = GRADE_LABELS[grade];
+    document.getElementById('grade-score-text').textContent = `${score}/100`;
+  }
 
   // Extraction tags
   const tagsEl = document.getElementById('extraction-tags');
@@ -604,6 +813,10 @@ function renderResult(data) {
   } else {
     altsCard.style.display = 'none';
   }
+
+  // Render health + food miles if present in complete result
+  if (data.health) renderHealthCard(data.health);
+  if (data.food_miles) renderFoodMilesCard(data.food_miles);
 
   showView('view-result');
   startVoiceAfterResult(data);

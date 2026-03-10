@@ -170,6 +170,179 @@ Return ONLY valid JSON in this exact structure:
         )
 
 
+def generate_template_content(
+    product: ProductInfo,
+    breakdown: ScoreBreakdown,
+    score: int,
+    grade: Literal["A", "B", "C", "D"],
+) -> tuple[str, list[ScoreFactor]]:
+    """Instant template-based explanation — no API calls.
+
+    Used for the progressive 'scored' phase to give users immediate
+    educational content while the Gemini explanation loads.
+    """
+    species = product.species or "this seafood product"
+    practices_label = (
+        "Aquaculture Practices"
+        if product.wild_or_farmed == "farmed"
+        else "Fishing Practices"
+    )
+
+    # Summary
+    grade_text = {
+        "A": "an excellent choice with strong sustainability credentials",
+        "B": "a good alternative with some areas for improvement",
+        "C": "a product to approach with caution",
+        "D": "a product best avoided based on available sustainability data",
+    }[grade]
+
+    parts: list[str] = [
+        f"{species.capitalize()} scored {score}/100 (grade {grade}), "
+        f"making it {grade_text}."
+    ]
+
+    unknown: list[str] = []
+    if product.wild_or_farmed == "unknown":
+        unknown.append("wild vs farmed status")
+    if product.fishing_method is None:
+        unknown.append("fishing method")
+    if product.origin_region is None:
+        unknown.append("origin region")
+    if not product.certifications:
+        unknown.append("certifications")
+    if unknown:
+        verb = "was" if len(unknown) == 1 else "were"
+        parts.append(
+            f"{', '.join(unknown).capitalize()} {verb} not visible on the page, "
+            "which may affect the score."
+        )
+
+    summary = " ".join(parts)
+
+    # Score factors
+    include_tips = grade in ("C", "D")
+
+    # Biological
+    bio_pct = breakdown.biological / 20
+    if bio_pct >= 0.7:
+        bio_expl = (
+            f"{species.capitalize()} has favorable biological characteristics "
+            "for sustainability."
+        )
+    elif bio_pct >= 0.4:
+        bio_expl = f"{species.capitalize()} has moderate biological vulnerability."
+    else:
+        bio_expl = (
+            f"{species.capitalize()} has concerning biological vulnerability, "
+            "with characteristics that make population recovery difficult."
+        )
+    bio_tip = (
+        "Look for species with faster growth rates and higher resilience."
+        if include_tips and bio_pct < 0.5
+        else None
+    )
+
+    # Practices
+    if product.fishing_method:
+        practices_expl = f"Caught using {product.fishing_method}."
+    elif product.wild_or_farmed == "farmed":
+        if product.certifications and any(
+            c.upper() in ("ASC", "BAP") for c in product.certifications
+        ):
+            practices_expl = (
+                "This farmed product has recognized aquaculture certification."
+            )
+        else:
+            practices_expl = (
+                "Farmed product without visible aquaculture certification."
+            )
+    else:
+        practices_expl = (
+            "No fishing method was visible on the page, "
+            "so a default score was applied."
+        )
+    practices_tip = (
+        "Look for products caught with selective gear "
+        "like pole-and-line or pot/trap."
+        if include_tips and breakdown.practices / 25 < 0.5
+        else None
+    )
+
+    # Management
+    if product.certifications:
+        cert_list = ", ".join(product.certifications)
+        mgmt_expl = (
+            f"Certifications visible: {cert_list}. "
+            "Third-party certification indicates independent "
+            "sustainability verification."
+        )
+    else:
+        mgmt_expl = (
+            "No sustainability certifications were visible on the page, "
+            "which limits the management score."
+        )
+    mgmt_tip = (
+        "Look for the MSC blue fish logo (wild-caught) or ASC teal logo "
+        "(farmed) for independently verified sustainability."
+        if include_tips and not product.certifications
+        else None
+    )
+
+    # Ecological
+    eco_pct = breakdown.ecological / 25
+    if eco_pct >= 0.7:
+        eco_expl = (
+            f"{species.capitalize()} has a relatively low ecological impact "
+            "based on its role in the food web."
+        )
+    elif eco_pct >= 0.4:
+        eco_expl = f"{species.capitalize()} has a moderate ecological footprint."
+    else:
+        eco_expl = (
+            f"{species.capitalize()} has a higher ecological impact, "
+            "potentially due to its position in the food web."
+        )
+    eco_tip = (
+        "Consider lower-trophic species like sardines, mussels, or oysters "
+        "for reduced ecological impact."
+        if include_tips and eco_pct < 0.5
+        else None
+    )
+
+    score_factors = [
+        ScoreFactor(
+            category="Biological & Population",
+            score=breakdown.biological,
+            max_score=20,
+            explanation=bio_expl,
+            tip=bio_tip,
+        ),
+        ScoreFactor(
+            category=practices_label,
+            score=breakdown.practices,
+            max_score=25,
+            explanation=practices_expl,
+            tip=practices_tip,
+        ),
+        ScoreFactor(
+            category="Management & Regulation",
+            score=breakdown.management,
+            max_score=30,
+            explanation=mgmt_expl,
+            tip=mgmt_tip,
+        ),
+        ScoreFactor(
+            category="Environmental & Ecological",
+            score=breakdown.ecological,
+            max_score=25,
+            explanation=eco_expl,
+            tip=eco_tip,
+        ),
+    ]
+
+    return summary, score_factors
+
+
 def _fallback_summary(
     product: ProductInfo, score: int, grade: Literal["A", "B", "C", "D"]
 ) -> str:

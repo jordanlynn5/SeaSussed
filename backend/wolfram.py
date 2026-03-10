@@ -1,43 +1,51 @@
-"""Wolfram Alpha carbon footprint queries."""
+"""Wolfram Alpha food miles (distance) queries."""
 
-import json
 import logging
 import os
-from functools import lru_cache
+import re
 from typing import Any
 
 import httpx
 
-from gemini_client import get_genai_client, strip_json_fences
-from models import CarbonFootprint
+from models import FoodMiles, UserLocation
 
 log = logging.getLogger(__name__)
 
 _WOLFRAM_URL = "https://api.wolframalpha.com/v2/query"
 _TIMEOUT = 5.0  # seconds
-_BEEF_CO2_PER_SERVING = 6.6  # kg CO₂e per 113g serving (reference point)
+
+_MILES_RE = re.compile(r"([\d,]+(?:\.\d+)?)\s*miles", re.IGNORECASE)
+_KM_RE = re.compile(r"([\d,]+(?:\.\d+)?)\s*(?:km|kilometers|kilometres)", re.IGNORECASE)
 
 
-@lru_cache(maxsize=256)
-def get_carbon_footprint(species: str) -> CarbonFootprint | None:
-    """Query Wolfram Alpha for CO2 footprint of a seafood species.
+def get_food_miles(origin_region: str, user_location: UserLocation) -> FoodMiles | None:
+    """Query Wolfram Alpha for distance between origin and user location.
 
-    Returns None if WOLFRAM_APP_ID is unset, WA has no data, or any error occurs.
+    Returns None if WOLFRAM_APP_ID is unset, origin is empty, or WA has no data.
     """
     app_id = os.environ.get("WOLFRAM_APP_ID")
-    if not app_id or not species:
+    if not app_id or not origin_region:
         return None
 
+    destination = f"{user_location.city}, {user_location.country}"
+    query = f"distance from {origin_region} to {destination}"
+
     try:
-        pods = _query_wolfram(
-            f"carbon footprint of {species} fish per kilogram",
-            app_id,
-        )
+        pods = _query_wolfram(query, app_id)
         if not pods:
             return None
-        return _parse_carbon(pods, species)
+
+        miles = _parse_distance(pods)
+        if miles is None or miles <= 0:
+            return None
+
+        return FoodMiles(
+            distance_miles=miles,
+            origin=origin_region,
+            destination=f"{user_location.city}, {user_location.region}",
+        )
     except Exception as e:
-        log.warning("get_carbon_footprint(%s) failed: %s", species, e)
+        log.warning("get_food_miles(%s) failed: %s", origin_region, e)
         return None
 
 
@@ -62,50 +70,31 @@ def _query_wolfram(query: str, app_id: str) -> list[dict[str, Any]]:
     return pods
 
 
-def _parse_carbon(pods: list[dict[str, Any]], species: str) -> CarbonFootprint | None:
-    """Extract CO2 kg per serving from WA pod text using Gemini."""
-    # Collect all pod plaintext
-    all_text = []
+def _parse_distance(pods: list[dict[str, Any]]) -> int | None:
+    """Extract distance in miles from Wolfram Alpha pods.
+
+    Looks for "Result" pod first, then any pod with miles/km.
+    """
+    # Collect all pod text, prioritising "Result" pod
+    result_texts: list[str] = []
+    other_texts: list[str] = []
     for pod in pods:
         for subpod in pod.get("subpods", []):
             txt = subpod.get("plaintext", "")
             if txt:
-                all_text.append(f"[{pod.get('title', '')}] {txt}")
+                if pod.get("title", "").lower() == "result":
+                    result_texts.append(txt)
+                else:
+                    other_texts.append(txt)
 
-    if not all_text:
-        return None
+    # Search Result pod first, then others
+    for txt in result_texts + other_texts:
+        m = _MILES_RE.search(txt)
+        if m:
+            return int(float(m.group(1).replace(",", "")))
+        m = _KM_RE.search(txt)
+        if m:
+            km = float(m.group(1).replace(",", ""))
+            return int(km * 0.621371)
 
-    pod_text = "\n".join(all_text)
-    prompt = f"""Extract the carbon footprint (CO2 equivalent) for {species} from this
-Wolfram Alpha data. Convert to kg CO2e per 113g (4oz) serving.
-
-Data:
-{pod_text}
-
-Return ONLY a JSON object:
-{{"co2_kg_per_serving": <float or null>}}
-
-If the data doesn't contain carbon/CO2/greenhouse gas information, return null.
-Return ONLY the JSON, no explanation."""
-
-    try:
-        client = get_genai_client()
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        raw = strip_json_fences(response.text or "")
-        result = json.loads(raw)
-        co2 = result.get("co2_kg_per_serving")
-        if co2 is None or not isinstance(co2, (int, float)):
-            return None
-        co2_float = float(co2)
-        if co2_float <= 0:
-            return None
-        return CarbonFootprint(
-            co2_kg_per_serving=round(co2_float, 2),
-            comparison_text=f"Beef produces ~{_BEEF_CO2_PER_SERVING} kg CO2 per serving",
-        )
-    except Exception as e:
-        log.warning("_parse_carbon failed for %s: %s", species, e)
-        return None
+    return None
