@@ -10,6 +10,26 @@ A Chrome extension powered by Gemini 2.5 Flash that gives you an instant sustain
 
 ---
 
+## Try It — No Setup Required
+
+> **The backend is already deployed on Google Cloud Run. You only need to load the extension.**
+
+1. Clone this repo
+2. Open `chrome://extensions` in Chrome
+3. Enable **Developer mode** (toggle, top right)
+4. Click **Load unpacked** → select the `extension/` folder
+5. Click the SeaSussed icon in your toolbar → side panel opens
+
+**Quick demo:**
+- Go to [Whole Foods Market](https://www.wholefoodsmarket.com) and search for salmon
+- Open any product page
+- Click **Analyze This Page** in the side panel
+- Tap the mic and ask *"Is there a better option?"*
+
+That's it. No API keys, no GCP account, no local server.
+
+---
+
 ## How It Works
 
 SeaSussed lives in your Chrome side panel. Browse any grocery website, click **Analyze**, and in seconds you get:
@@ -36,19 +56,6 @@ Tap the microphone for a live conversation with your sustainability expert:
 Amazon Fresh, Whole Foods, Instacart, Walmart, specialty seafood retailers — SeaSussed reads screenshots and page text, so it works on any site without needing retailer integrations.
 
 ---
-
-## Try It
-
-### Install the Extension
-
-1. Clone this repo
-2. Open `chrome://extensions` in Chrome
-3. Enable **Developer mode** (top right)
-4. Click **Load unpacked** and select the `extension/` directory
-5. Click the SeaSussed icon in your toolbar to open the side panel
-6. Navigate to any seafood product page and click **Analyze This Page**
-
-The extension connects to our hosted Cloud Run backend — no local setup needed.
 
 ---
 
@@ -120,10 +127,10 @@ Four categories, total 0–100:
 ## Development
 
 <details>
-<summary>Local backend setup</summary>
+<summary>Local backend setup (contributors only — requires GCP project access)</summary>
 
 ```bash
-# Prerequisites: Python 3.13, uv, gcloud CLI, Vertex AI enabled
+# Prerequisites: Python 3.13, uv, gcloud CLI, access to seasussed-489008 GCP project
 
 gcloud auth application-default login
 
