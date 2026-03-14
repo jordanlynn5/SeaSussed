@@ -10,6 +10,7 @@ class AnalyzeRequest(BaseModel):
     related_products: list[str] = []  # product titles scraped from DOM
     page_text: str = ""  # full DOM text (description, details, ingredients)
     product_images: list[str] = []  # base64-encoded gallery images (front, back, label)
+    related_products_with_urls: list[dict[str, str]] = []  # [{title, url}] for card links
 
 
 class ScoreRequest(BaseModel):
@@ -24,6 +25,7 @@ class ProductInfo(BaseModel):
     origin_region: str | None
     certifications: list[str]  # ["MSC", "ASC", "BAP", "ASMI", ...]
     product_name: str | None = None
+    price: str | None = None  # e.g. "$12.99/lb", "$24.99"
 
 
 class ScoreBreakdown(BaseModel):
@@ -62,6 +64,8 @@ class PageProduct(BaseModel):
     score: int
     grade: Literal["A", "B", "C", "D"]
     breakdown: ScoreBreakdown
+    price: str | None = None
+    url: str | None = None  # product page URL for clickable cards
 
 
 class HealthInfo(BaseModel):
@@ -106,3 +110,4 @@ class AnalyzeResponse(BaseModel):
     page_type: Literal["single_product", "product_listing", "no_seafood"]
     result: SustainabilityScore | None = None  # single_product or no_seafood
     products: list[PageProduct] = []  # product_listing
+    summary: str = ""  # comparative overview for product_listing

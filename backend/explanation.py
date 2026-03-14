@@ -14,7 +14,7 @@ from typing import Literal
 
 from database import get_gear_score
 from gemini_client import get_genai_client, strip_json_fences
-from models import ProductInfo, ScoreBreakdown, ScoreFactor
+from models import PageProduct, ProductInfo, ScoreBreakdown, ScoreFactor
 
 log = logging.getLogger(__name__)
 
@@ -395,3 +395,81 @@ def _fallback_factors(
             tip=None,
         ),
     ]
+
+
+def generate_listing_summary(products: list[PageProduct]) -> str:
+    """Generate a comparative summary for a multi-product listing page.
+
+    Returns a short paragraph explaining which products are best/worst and why,
+    without repeating scores the user can already see.
+    """
+    if not products:
+        return "No seafood products were found on this page."
+
+    # Build product context for Gemini
+    lines: list[str] = []
+    for p in products:
+        certs = ", ".join(p.certifications) if p.certifications else "none"
+        lines.append(
+            f"- {p.product_name}: Grade {p.grade} ({p.score}/100), "
+            f"{p.species or 'unknown species'}, {p.wild_or_farmed}, certs: {certs}"
+        )
+    product_block = "\n".join(lines)
+
+    prompt = f"""You are a seafood sustainability advisor helping a grocery shopper.
+The user is viewing a page with {len(products)} seafood products. Here are the scored results:
+
+{product_block}
+
+Write a 2-4 sentence comparative summary for the shopper. Rules:
+1. Lead with the best option and explain WHY it scored well \
+(e.g. certifications, wild-caught, well-managed fishery).
+2. Briefly note what drags down the weaker options \
+(e.g. no certifications, farmed without ASC, unknown origin).
+3. Do NOT list every product's score — the scores are visible in the UI.
+4. Be conversational and helpful, not preachy.
+5. If all products score similarly, say so and note what they have in common.
+6. Return ONLY the summary text, no JSON, no markdown formatting."""
+
+    try:
+        client = get_genai_client()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        summary = (response.text or "").strip()
+        if summary:
+            return summary
+    except Exception as e:
+        log.warning("generate_listing_summary failed: %s", e)
+
+    # Fallback: template-based summary
+    return _fallback_listing_summary(products)
+
+
+def _fallback_listing_summary(products: list[PageProduct]) -> str:
+    """Template fallback when Gemini is unavailable."""
+    best = products[0]  # already sorted by score desc
+    worst = products[-1]
+
+    if best.score == worst.score:
+        return (
+            f"All {len(products)} products scored similarly at grade {best.grade}. "
+            f"Any of these would be a comparable choice."
+        )
+
+    parts: list[str] = [
+        f"{best.product_name} is your best option here with a grade {best.grade}."
+    ]
+    if best.certifications:
+        parts.append(
+            f"It has {', '.join(best.certifications)} certification, "
+            "which indicates independent sustainability verification."
+        )
+    if worst.grade in ("C", "D"):
+        parts.append(
+            f"{worst.product_name} scored lowest at grade {worst.grade}"
+            + (" — no certifications were visible." if not worst.certifications else ".")
+        )
+
+    return " ".join(parts)

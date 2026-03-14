@@ -15,6 +15,7 @@ from pipeline import analyze_page, analyze_page_progressive, run_scoring_pipelin
 from voice_session import VoiceSession
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s: %(message)s")
+log = logging.getLogger(__name__)
 
 app = FastAPI(title="SeaSussed Backend", version="0.1.0")
 
@@ -75,7 +76,12 @@ async def analyze(request: Request, body: AnalyzeRequest) -> AnalyzeResponse:
         page_text=body.page_text,
         product_images=body.product_images,
     )
-    return await analyze_page(page_analysis, body.related_products, client_ip=ip)
+    return await analyze_page(
+        page_analysis,
+        body.related_products,
+        client_ip=ip,
+        related_products_with_urls=body.related_products_with_urls,
+    )
 
 
 @app.post("/analyze/stream")
@@ -96,18 +102,25 @@ async def analyze_stream(request: Request, body: AnalyzeRequest) -> StreamingRes
         # Emit immediately so the client knows the connection is live
         yield f"data: {json.dumps({'phase': 'analyzing'})}\n\n"
 
-        page_analysis = await analyze_screenshot(
-            body.screenshot,
-            body.url,
-            body.page_title,
-            page_text=body.page_text,
-            product_images=body.product_images,
-        )
+        try:
+            page_analysis = await analyze_screenshot(
+                body.screenshot,
+                body.url,
+                body.page_title,
+                page_text=body.page_text,
+                product_images=body.product_images,
+            )
 
-        async for event in analyze_page_progressive(
-            page_analysis, body.related_products, client_ip=ip
-        ):
-            yield f"data: {json.dumps(event)}\n\n"
+            async for event in analyze_page_progressive(
+                page_analysis,
+                body.related_products,
+                client_ip=ip,
+                related_products_with_urls=body.related_products_with_urls,
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            log.error("SSE stream error: %s", exc, exc_info=True)
+            yield f"data: {json.dumps({'phase': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

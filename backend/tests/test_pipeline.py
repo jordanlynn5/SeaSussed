@@ -112,6 +112,9 @@ async def test_product_listing_returns_sorted_page_products() -> None:
         assert pp.grade in ("A", "B", "C", "D")
         assert 0 <= pp.score <= 100
         assert pp.breakdown.biological >= 0
+    # Summary should be present and non-empty
+    assert result.summary
+    assert len(result.summary) > 10
 
 
 @pytest.mark.asyncio
@@ -167,7 +170,7 @@ async def test_progressive_no_seafood_yields_single_complete() -> None:
 
 @pytest.mark.asyncio
 async def test_progressive_listing_yields_single_complete() -> None:
-    """product_listing emits a single 'complete' event with products."""
+    """product_listing emits a single 'complete' event with products + summary."""
     products = [
         _make_product("salmon", name="Wild Salmon"),
         _make_product("cod", name="Cod Fillet"),
@@ -178,6 +181,9 @@ async def test_progressive_listing_yields_single_complete() -> None:
     assert events[0]["phase"] == "complete"
     assert events[0]["page_type"] == "product_listing"
     assert len(events[0]["products"]) == 2
+    # Summary should be present
+    assert "summary" in events[0]
+    assert len(events[0]["summary"]) > 10
 
 
 @pytest.mark.asyncio
@@ -213,3 +219,23 @@ async def test_progressive_single_product_yields_scored_then_complete(
     assert events[1]["page_type"] == "single_product"
     assert "result" in events[1]
     assert events[1]["result"]["score"] == events[0]["score"]
+
+
+@pytest.mark.asyncio
+async def test_listing_url_passed_to_page_product() -> None:
+    """URL from related_products_with_urls is matched to PageProduct.url."""
+    products = [
+        _make_product("Atlantic cod", name="Fresh Atlantic Cod Fillet"),
+        _make_product("sockeye salmon", name="Wild Sockeye Salmon"),
+    ]
+    pa = PageAnalysis(page_type="product_listing", products=products)
+    url_map = [
+        {"title": "Fresh Atlantic Cod Fillet 1 lb", "url": "https://example.com/cod"},
+        {"title": "Wild Sockeye Salmon Fillet", "url": "https://example.com/salmon"},
+    ]
+    result = await analyze_page(pa, [], related_products_with_urls=url_map)
+
+    assert result.page_type == "product_listing"
+    # At least one product should have a matched URL (token overlap)
+    urls = [p.url for p in result.products]
+    assert any(u is not None for u in urls)

@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from alternatives import score_alternatives
-from explanation import generate_content, generate_template_content
+from explanation import generate_content, generate_listing_summary, generate_template_content
 from geolocation import get_user_location
 from health import get_health_info
 from models import (
@@ -19,6 +19,41 @@ from models import (
 from research import research_product
 from scoring import compute_score
 from wolfram import get_food_miles
+
+_STOPWORDS = {"the", "a", "an", "of", "and", "or", "in", "at", "to", "with", "for", "lb", "oz"}
+
+
+def _match_url(product_name: str, url_entries: list[dict[str, str]]) -> str | None:
+    """Return the best-matching URL for product_name from url_entries.
+
+    Three-tier match: exact → substring containment → token overlap ≥ 2.
+    Returns None if no confident match found.
+    """
+    if not product_name or not url_entries:
+        return None
+    name_lower = product_name.strip().lower()
+    for entry in url_entries:
+        title_lower = entry.get("title", "").strip().lower()
+        url = entry.get("url", "")
+        if not title_lower or not url:
+            continue
+        if name_lower == title_lower:
+            return url
+        if name_lower in title_lower or title_lower in name_lower:
+            return url
+    name_tokens = {t for t in name_lower.split() if t not in _STOPWORDS and len(t) > 2}
+    best_url: str | None = None
+    best_overlap = 1
+    for entry in url_entries:
+        title_tokens = {
+            t for t in entry.get("title", "").lower().split()
+            if t not in _STOPWORDS and len(t) > 2
+        }
+        overlap = len(name_tokens & title_tokens)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_url = entry.get("url") or None
+    return best_url
 
 
 async def run_scoring_pipeline(
@@ -98,6 +133,7 @@ async def analyze_page(
     page_analysis: PageAnalysis,
     related_products: list[str],
     client_ip: str = "",
+    related_products_with_urls: list[dict[str, str]] | None = None,
 ) -> AnalyzeResponse:
     """Route a PageAnalysis to the correct scoring path and return AnalyzeResponse."""
     # No seafood or empty products → no_seafood response
@@ -123,7 +159,8 @@ async def analyze_page(
         result = await run_scoring_pipeline(product, related_products, client_ip=client_ip)
         return AnalyzeResponse(page_type="single_product", result=result)
 
-    # Multiple seafood products → batch score with pure Python (no Gemini calls)
+    # Multiple seafood products → batch score + comparative summary
+    url_entries = related_products_with_urls or []
     page_products: list[PageProduct] = []
     for product in seafood_products:
         breakdown, total, grade = compute_score(product)
@@ -136,19 +173,27 @@ async def analyze_page(
                 score=total,
                 grade=grade,
                 breakdown=breakdown,
+                price=product.price,
+                url=_match_url(product.product_name or product.species or "", url_entries),
             )
         )
 
     # Sort by score descending
     page_products.sort(key=lambda p: p.score, reverse=True)
 
-    return AnalyzeResponse(page_type="product_listing", products=page_products)
+    # Gemini comparative summary
+    summary = await asyncio.to_thread(generate_listing_summary, page_products)
+
+    return AnalyzeResponse(
+        page_type="product_listing", products=page_products, summary=summary,
+    )
 
 
 async def analyze_page_progressive(
     page_analysis: PageAnalysis,
     related_products: list[str],
     client_ip: str = "",
+    related_products_with_urls: list[dict[str, str]] | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Yield progressive SSE events as dicts.
 
@@ -175,12 +220,13 @@ async def analyze_page_progressive(
         }
         return
 
-    # Product listing → batch score, single complete event
+    # Product listing → batch score + comparative summary, single complete event
     if len(seafood_products) > 1 and page_analysis.page_type != "single_product":
-        page_products: list[dict[str, Any]] = []
+        url_entries_prog = related_products_with_urls or []
+        scored_products: list[PageProduct] = []
         for product in seafood_products:
             breakdown, total, grade = compute_score(product)
-            page_products.append(
+            scored_products.append(
                 PageProduct(
                     product_name=product.product_name or product.species or "Seafood product",
                     species=product.species,
@@ -189,10 +235,20 @@ async def analyze_page_progressive(
                     score=total,
                     grade=grade,
                     breakdown=breakdown,
-                ).model_dump()
+                    price=product.price,
+                    url=_match_url(
+                        product.product_name or product.species or "", url_entries_prog
+                    ),
+                )
             )
-        page_products.sort(key=lambda p: p["score"], reverse=True)
-        yield {"phase": "complete", "page_type": "product_listing", "products": page_products}
+        scored_products.sort(key=lambda p: p.score, reverse=True)
+        summary = await asyncio.to_thread(generate_listing_summary, scored_products)
+        yield {
+            "phase": "complete",
+            "page_type": "product_listing",
+            "products": [p.model_dump() for p in scored_products],
+            "summary": summary,
+        }
         return
 
     # Single product → progressive: score first, then enrichment

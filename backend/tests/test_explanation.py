@@ -176,6 +176,88 @@ def test_template_mentions_certifications() -> None:
     assert "MSC" in mgmt.explanation
 
 
+def test_listing_summary_returns_string() -> None:
+    """generate_listing_summary returns a non-empty comparative summary."""
+    from models import PageProduct, ScoreBreakdown
+
+    products = [
+        PageProduct(
+            product_name="Wild Sockeye Salmon",
+            species="sockeye salmon",
+            wild_or_farmed="wild",
+            certifications=["MSC"],
+            score=85,
+            grade="A",
+            breakdown=ScoreBreakdown(
+                biological=16, practices=20, management=28, ecological=21,
+            ),
+        ),
+        PageProduct(
+            product_name="Farmed Atlantic Salmon",
+            species="Atlantic salmon",
+            wild_or_farmed="farmed",
+            certifications=[],
+            score=42,
+            grade="C",
+            breakdown=ScoreBreakdown(
+                biological=8, practices=10, management=7, ecological=17,
+            ),
+        ),
+    ]
+    from explanation import generate_listing_summary
+
+    summary = generate_listing_summary(products)
+    assert isinstance(summary, str)
+    assert len(summary) > 20
+
+
+def test_listing_summary_mentions_best_product() -> None:
+    """Summary should reference the highest-scoring product."""
+    from models import PageProduct, ScoreBreakdown
+
+    products = [
+        PageProduct(
+            product_name="Wild Sockeye Salmon",
+            species="sockeye salmon",
+            wild_or_farmed="wild",
+            certifications=["MSC"],
+            score=85,
+            grade="A",
+            breakdown=ScoreBreakdown(
+                biological=16, practices=20, management=28, ecological=21,
+            ),
+        ),
+        PageProduct(
+            product_name="Tilapia Fillet",
+            species="tilapia",
+            wild_or_farmed="farmed",
+            certifications=[],
+            score=48,
+            grade="C",
+            breakdown=ScoreBreakdown(
+                biological=10, practices=12, management=8, ecological=18,
+            ),
+        ),
+    ]
+    from explanation import generate_listing_summary
+
+    summary = generate_listing_summary(products)
+    # Should mention the best product by name or species
+    has_best = any(
+        kw in summary.lower() for kw in ["sockeye", "salmon", "wild"]
+    )
+    assert has_best, f"Summary should mention top product: {summary}"
+
+
+def test_listing_summary_fallback_on_empty() -> None:
+    """Empty product list returns a sensible fallback."""
+    from explanation import generate_listing_summary
+
+    summary = generate_listing_summary([])
+    assert isinstance(summary, str)
+    assert len(summary) > 0
+
+
 @pytest.mark.skipif(
     not _HAS_CREDENTIALS, reason="Requires GOOGLE_CLOUD_PROJECT for Gemini call"
 )

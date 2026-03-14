@@ -59,6 +59,66 @@ def test_product_info_with_product_name() -> None:
     assert pi.species == "sockeye salmon"
 
 
+def test_product_info_price_default_none() -> None:
+    """ProductInfo.price defaults to None."""
+    pi = ProductInfo(
+        is_seafood=True,
+        species="cod",
+        wild_or_farmed="wild",
+        fishing_method=None,
+        origin_region=None,
+        certifications=[],
+    )
+    assert pi.price is None
+
+
+def test_product_info_with_price() -> None:
+    """ProductInfo accepts and stores price."""
+    pi = ProductInfo(
+        is_seafood=True,
+        species="sockeye salmon",
+        wild_or_farmed="wild",
+        fishing_method=None,
+        origin_region="Alaska",
+        certifications=["MSC"],
+        price="$12.99/lb",
+    )
+    assert pi.price == "$12.99/lb"
+
+
+def test_page_product_price_default_none() -> None:
+    """PageProduct.price defaults to None."""
+    pp = PageProduct(
+        product_name="Wild Salmon",
+        species="salmon",
+        wild_or_farmed="wild",
+        certifications=[],
+        score=75,
+        grade="B",
+        breakdown=ScoreBreakdown(
+            biological=14, practices=18, management=24, ecological=19,
+        ),
+    )
+    assert pp.price is None
+
+
+def test_page_product_with_price() -> None:
+    """PageProduct accepts and stores price."""
+    pp = PageProduct(
+        product_name="Wild Salmon",
+        species="salmon",
+        wild_or_farmed="wild",
+        certifications=[],
+        score=75,
+        grade="B",
+        breakdown=ScoreBreakdown(
+            biological=14, practices=18, management=24, ecological=19,
+        ),
+        price="$14.99",
+    )
+    assert pp.price == "$14.99"
+
+
 def test_page_analysis_single_product() -> None:
     pi = ProductInfo(
         is_seafood=True,
@@ -161,3 +221,53 @@ def test_analyze_response_multi_product() -> None:
     assert resp.page_type == "product_listing"
     assert resp.result is None
     assert len(resp.products) == 3
+
+
+def test_page_product_url_default_none() -> None:
+    """PageProduct.url defaults to None."""
+    pp = PageProduct(
+        product_name="Wild Salmon",
+        species="salmon",
+        wild_or_farmed="wild",
+        certifications=[],
+        score=75,
+        grade="B",
+        breakdown=ScoreBreakdown(biological=14, practices=18, management=24, ecological=19),
+    )
+    assert pp.url is None
+
+
+def test_page_product_with_url() -> None:
+    """PageProduct accepts and stores url."""
+    pp = PageProduct(
+        product_name="Wild Salmon",
+        species="salmon",
+        wild_or_farmed="wild",
+        certifications=[],
+        score=75,
+        grade="B",
+        breakdown=ScoreBreakdown(biological=14, practices=18, management=24, ecological=19),
+        url="https://www.amazon.com/dp/B09G543RDP",
+    )
+    assert pp.url == "https://www.amazon.com/dp/B09G543RDP"
+
+
+def test_analyze_request_with_related_products_with_urls() -> None:
+    """AnalyzeRequest accepts related_products_with_urls."""
+    req = AnalyzeRequest(
+        screenshot="abc",
+        url="https://example.com",
+        related_products=["Wild Salmon Fillet", "Atlantic Cod"],
+        related_products_with_urls=[
+            {"title": "Wild Salmon Fillet 1lb", "url": "https://example.com/product/1"},
+            {"title": "Atlantic Cod Fillet", "url": "https://example.com/product/2"},
+        ],
+    )
+    assert len(req.related_products_with_urls) == 2
+    assert req.related_products_with_urls[0]["title"] == "Wild Salmon Fillet 1lb"
+
+
+def test_analyze_request_related_products_with_urls_defaults_empty() -> None:
+    """AnalyzeRequest.related_products_with_urls defaults to empty list."""
+    req = AnalyzeRequest(screenshot="abc", url="https://example.com")
+    assert req.related_products_with_urls == []

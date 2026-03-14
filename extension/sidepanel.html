@@ -73,6 +73,10 @@
     .grade-label { font-size: 12px; color: #6b7280; font-weight: 500; }
     .grade-score { font-size: 20px; font-weight: 700; color: #111; }
     .grade-subtitle { font-size: 12px; color: #9ca3af; margin-top: 1px; }
+    .grade-price {
+      font-size: 16px; font-weight: 700; color: #111;
+      text-align: right; flex-shrink: 0; line-height: 1.2;
+    }
 
     .card {
       background: white; border-radius: 10px; padding: 14px;
@@ -144,6 +148,11 @@
       background: #3b82f6; color: white; font-size: 12px; font-weight: 700;
       padding: 2px 8px; border-radius: 10px; min-width: 20px; text-align: center;
     }
+    .listing-summary {
+      background: #f0f9ff; border-radius: 10px; padding: 12px 14px;
+      margin-bottom: 12px; font-size: 13px; line-height: 1.5;
+      color: #1e3a5f; border-left: 3px solid #3b82f6;
+    }
     .product-list-item {
       background: white; border-radius: 10px; padding: 12px;
       margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06);
@@ -162,6 +171,8 @@
       font-size: 13px; font-weight: 600; color: #111;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+    .list-header-clickable { cursor: pointer; }
+    .list-header-clickable:hover { background: #f0f9ff; border-radius: 6px; }
     .list-product-meta {
       display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px;
     }
@@ -170,10 +181,18 @@
       font-size: 14px; font-weight: 700; color: #1f2937;
       flex-shrink: 0; margin-left: 4px;
     }
-    .list-chevron {
-      font-size: 10px; color: #9ca3af; transition: transform 0.15s ease;
-      flex-shrink: 0; margin-left: 2px;
+    .list-price {
+      font-size: 12px; font-weight: 600; color: #374151;
+      margin-top: 1px;
     }
+    .list-chevron {
+      font-size: 13px; color: #6b7280;
+      flex-shrink: 0; margin-left: 4px;
+      padding: 6px 8px; border-radius: 6px; cursor: pointer;
+      transition: background 0.12s, color 0.12s, transform 0.15s ease;
+      line-height: 1;
+    }
+    .list-chevron:hover { background: #e5e7eb; color: #111; }
     .product-list-item.open .list-chevron { transform: rotate(90deg); }
     .list-breakdown {
       display: none; padding: 10px 0 0 46px;
@@ -309,7 +328,7 @@
   <div class="view" id="view-onboarding">
     <div class="onboarding-icon">🐟</div>
     <h1>Welcome to SeaSussed</h1>
-    <p>Instant sustainability scores for seafood while you shop online.</p>
+    <p>Not all seafood is equal. Now you'll know the difference.</p>
     <div class="notice">
       📷 When you click Analyze, a screenshot of the current tab is sent to SeaSussed's
       servers to identify the seafood product. Screenshots are not stored after analysis.
@@ -325,15 +344,15 @@
   <div class="view" id="view-idle">
     <div class="icon">🐠</div>
     <h2>SeaSussed</h2>
-    <p>Instant sustainability scores for seafood — with live AI voice.</p>
-    <button class="btn-primary" id="analyze-btn">Analyze This Page</button>
+    <p>Because good intentions deserve good information.</p>
+    <button class="btn-primary" id="analyze-btn">Score This Seafood</button>
 
     <div class="how-to">
       <div class="how-to-title">How it works</div>
       <ol class="how-to-steps">
-        <li>Navigate to any online seafood product page</li>
-        <li>Click <strong>Analyze This Page</strong></li>
-        <li>Get an instant score — then our voice AI reacts</li>
+        <li>Browse and select any seafood product on your favorite grocery site</li>
+        <li>Click <strong>Score This Seafood</strong> — we'll handle the research for you</li>
+        <li>Get a sustainability grade and hear why it matters so that you can decide if it's the best choice</li>
       </ol>
 
       <div class="how-to-title" style="margin-top:16px;">Scores</div>
@@ -365,6 +384,7 @@
         <div class="grade-score" id="grade-score-text">84/100</div>
         <div class="grade-subtitle">SeaSussed Score</div>
       </div>
+      <div class="grade-price" id="grade-price" style="display:none;"></div>
     </div>
 
     <!-- Health card (mercury + omega-3) -->
@@ -420,6 +440,7 @@
       <h2 style="font-size:16px; font-weight:700; flex:1;">Seafood on This Page</h2>
       <span class="list-count-badge" id="list-count-badge">0</span>
     </div>
+    <div id="listing-summary" class="listing-summary" style="display:none;"></div>
     <div id="product-list"></div>
     <button class="btn-secondary" id="list-analyze-again-btn">Analyze Again</button>
     <div class="footer">Screenshots not stored &middot; SeaSussed</div>

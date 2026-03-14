@@ -17,6 +17,9 @@ class VoiceClient {
     this.onScoreResult = () => {};
     this.onError = () => {};
     this.onAudioActivity = () => {}; // fires each time a mic chunk is sent
+    this._pendingNavigateUrl = null;
+    this._navigateListener = null;
+    this._navigateTimeout = null;
   }
 
   // ── Public API ──────────────────────────────────────────
@@ -93,7 +96,21 @@ class VoiceClient {
     this.ws.send(JSON.stringify({ type: 'result_context', ...ctx }));
   }
 
+  sendContextUpdate(update) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'context_update', ...update }));
+  }
+
   stop() {
+    if (this._navigateListener) {
+      chrome.tabs.onUpdated.removeListener(this._navigateListener);
+      this._navigateListener = null;
+    }
+    if (this._navigateTimeout) {
+      clearTimeout(this._navigateTimeout);
+      this._navigateTimeout = null;
+    }
+    this._pendingNavigateUrl = null;
     if (this.ws) {
       if (this.ws.readyState === WebSocket.OPEN) {
         try { this.ws.send(JSON.stringify({ type: 'stop' })); } catch (_) {}
@@ -281,27 +298,86 @@ class VoiceClient {
   }
 
   async _navigateToUrl(url) {
+    // Guard: skip if already navigating to this URL
+    if (this._pendingNavigateUrl === url) {
+      console.log('[SeaSussed] Skipping duplicate navigate to:', url);
+      return;
+    }
+
+    // Clean up any pending navigation listener
+    if (this._navigateListener) {
+      chrome.tabs.onUpdated.removeListener(this._navigateListener);
+      this._navigateListener = null;
+    }
+    if (this._navigateTimeout) {
+      clearTimeout(this._navigateTimeout);
+      this._navigateTimeout = null;
+    }
+
+    this._pendingNavigateUrl = url;
+
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
     if (!tab?.id || !url) return;
     await chrome.tabs.update(tab.id, { url });
 
-    // Wait for the new page to finish loading, then auto-analyze
+    // Wait for the new page to finish loading, then poll for product
+    // content before triggering analysis (SPA pages render after load).
     const tabId = tab.id;
-    const onUpdated = (updatedId, info) => {
+    this._navigateListener = (updatedId, info) => {
       if (updatedId === tabId && info.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(onUpdated);
-        clearTimeout(timeout);
-        // Let the page DOM settle before capturing (SPAs may need a moment)
-        setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(this._navigateListener);
+        clearTimeout(this._navigateTimeout);
+        this._navigateListener = null;
+        this._navigateTimeout = null;
+        this._pendingNavigateUrl = null;
+        this._waitForProductContent(tabId).then(() => {
           if (typeof triggerAnalyze === 'function') triggerAnalyze();
-        }, 1500);
+        });
       }
     };
-    const timeout = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(onUpdated);
+    this._navigateTimeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(this._navigateListener);
+      this._navigateListener = null;
+      this._navigateTimeout = null;
+      this._pendingNavigateUrl = null;
     }, 15000);
-    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.onUpdated.addListener(this._navigateListener);
+  }
+
+  async _waitForProductContent(tabId) {
+    // Poll until the page has a product title or substantial content.
+    // SPA grocery sites (React/Next.js) often render after the load event.
+    const maxWait = 8000;
+    const interval = 500;
+    let elapsed = 0;
+    while (elapsed < maxWait) {
+      await new Promise(r => setTimeout(r, interval));
+      elapsed += interval;
+      try {
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const titleSels = [
+              '#productTitle', '#title', 'h1',
+              '[data-testid*="product-title"]', '[class*="ProductTitle"]',
+              '[class*="product-title"]', '[class*="ProductName"]',
+            ];
+            for (const sel of titleSels) {
+              const el = document.querySelector(sel);
+              if (el && el.innerText.trim().length > 3) return true;
+            }
+            // Fallback: check for substantial main content
+            const main = document.querySelector('main, [role="main"]');
+            return main ? main.innerText.trim().length > 500 : false;
+          },
+        });
+        if (result?.result) return;
+      } catch {
+        // scripting might fail on certain pages — keep waiting
+      }
+    }
+    // Timed out — proceed anyway with whatever is rendered
   }
 
   _waitForOpen() {
