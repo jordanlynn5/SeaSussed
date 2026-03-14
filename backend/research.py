@@ -91,6 +91,7 @@ Return ONLY a JSON object:
             contents=prompt,
             config=types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0,
             ),
         )
         raw = strip_json_fences(response.text or "")

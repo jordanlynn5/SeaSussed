@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import logging
+import time
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -20,30 +21,203 @@ log = logging.getLogger(__name__)
 LIVE_MODEL = "gemini-live-2.5-flash-native-audio"
 SCREENSHOT_TIMEOUT_S = 8.0
 KEEPALIVE_INTERVAL_S = 30.0
-ANNOUNCE_DELAY_S = 2.0  # seconds to let TTS announcement play before tool runs
+TOOL_COOLDOWN_S = 30.0
+
+_GENERIC_WORDS = frozenset({
+    "amazon", "grocery", "fresh", "brand", "oz",
+    "fillets", "fillet", "skinless", "boneless", "portions",
+    "portion", "previously", "packaging", "vary", "may",
+    "frozen", "caught", "wild", "farmed", "product",
+    "organic", "natural", "premium", "select", "choice",
+})
+
+# Words that appear in generic "best overall" requests but are NOT species names.
+# If every meaningful word in the user's intent is in this set, no species
+# constraint is applied and the highest-scored product wins regardless of species.
+_NON_SPECIES_INTENT_WORDS = frozenset({
+    # request verbs / phrases
+    "find", "get", "give", "show", "bring", "look", "search", "fetch",
+    # adjectives / qualifiers
+    "best", "better", "good", "great", "most", "sustainable", "highest",
+    "top", "any", "some", "another", "different", "other",
+    # generic nouns (not species names)
+    "fish", "seafood", "shellfish", "option", "options", "something",
+    "anything", "one", "item", "product", "choice",
+    # score/grade language
+    "score", "grade", "rated", "ranking",
+    # function words
+    "me", "you", "the", "a", "an", "for", "with", "what", "have",
+    "they", "do", "can", "please", "want", "like",
+})
+
+
+def _filter_by_intent(
+    products: list[dict[str, Any]], intent: str
+) -> list[dict[str, Any]]:
+    """Filter scored products by user intent constraints.
+
+    Applies apples-to-apples filtering so that e.g. "better aquaculture
+    practices" only returns farmed products (wild products don't have
+    aquaculture scores).  Falls back to the full list when the filter
+    would empty it.
+    """
+    if not intent:
+        return products
+
+    low = intent.lower()
+    filtered = list(products)
+
+    # Wild vs farmed constraint
+    _FARMED_KW = ("aquaculture", "farmed", "farm-raised", "farm raised")
+    _WILD_KW = ("wild-caught", "wild caught", "fishing practice", "fishing method")
+    if any(k in low for k in _FARMED_KW):
+        filtered = [p for p in filtered if p.get("wild_or_farmed") == "farmed"]
+    elif any(k in low for k in _WILD_KW):
+        filtered = [p for p in filtered if p.get("wild_or_farmed") == "wild"]
+
+    # Origin constraint
+    _ORIGINS = [
+        "alaska", "norway", "chile", "canada", "iceland", "japan",
+        "china", "vietnam", "thailand", "indonesia", "india", "ecuador",
+        "scotland", "atlantic", "pacific", "gulf",
+    ]
+    for origin in _ORIGINS:
+        if origin in low:
+            filtered = [
+                p for p in filtered
+                if p.get("origin_region") and origin in p["origin_region"].lower()
+            ]
+            break
+
+    # Fishing method constraint
+    # Order matters: longer/more-specific keywords first to avoid
+    # substring false positives (e.g. "longline" contains "line").
+    _METHODS: list[tuple[str, str]] = [
+        ("longline", "longline"), ("long line", "longline"),
+        ("line-caught", "line"), ("line caught", "line"),
+        ("hook and line", "line"),
+        ("pole-caught", "pole"), ("pole caught", "pole"),
+        ("trawl", "trawl"),
+        ("gillnet", "gillnet"), ("gill net", "gillnet"),
+        ("purse seine", "seine"),
+    ]
+    for keyword, match in _METHODS:
+        if keyword in low:
+            filtered = [
+                p for p in filtered
+                if p.get("fishing_method") and match in p["fishing_method"].lower()
+            ]
+            break
+
+    # Product form constraint
+    _FORMS = ["canned", "frozen", "fresh", "fillet", "smoked", "dried"]
+    for form in _FORMS:
+        if form in low:
+            filtered = [
+                p for p in filtered
+                if p.get("product_name") and form in p["product_name"].lower()
+            ]
+            break
+
+    # Fall back to unfiltered if every product was excluded
+    return filtered if filtered else products
+
+
+def _sort_key_for_intent(intent: str) -> str:
+    """Return the scored_products field to sort by for a given user intent.
+
+    Returns one of: "practices", "management", "biological", "ecological",
+    or "score" (default — overall total).
+    """
+    if not intent:
+        return "score"
+    low = intent.lower()
+    if any(k in low for k in ("practice", "aquaculture", "fishing method", "gear")):
+        return "practices"
+    if any(k in low for k in ("management", "certification", "regulated", "regulation")):
+        return "management"
+    if any(k in low for k in ("biological", "population", "species health", "resilience")):
+        return "biological"
+    if any(k in low for k in ("ecological", "environment", "bycatch", "habitat")):
+        return "ecological"
+    return "score"
+
 
 def _find_product_url(
-    product_name: str, links: list[dict[str, str]]
+    product_name: str,
+    links: list[dict[str, str]],
+    species: str | None = None,
 ) -> str | None:
-    """Find the best matching URL for a product name from scraped links."""
+    """Match a product name to a scraped URL.
+
+    Three-tier matching:
+    1. Bidirectional substring — either name contains the other
+    2. Species-gated fuzzy — require species word match, then count remaining
+    3. Fallback fuzzy — word-overlap with generic word exclusion
+    """
     if not product_name or not links:
         return None
+
     name_lower = product_name.lower()
-    # Try exact substring match first
+
+    # Tier 1: Bidirectional exact substring
     for link in links:
-        if name_lower in link.get("name", "").lower():
+        link_name = link.get("name", "").lower()
+        if not link_name:
+            continue
+        if name_lower in link_name or link_name in name_lower:
             return link.get("url")
-    # Try matching significant words (3+ chars)
-    words = [w for w in name_lower.split() if len(w) >= 3]
+
+    # Extract species words for gating
+    species_words: set[str] = set()
+    if species:
+        species_words = {
+            w.lower() for w in species.split() if len(w) >= 3
+        } - _GENERIC_WORDS
+
+    # Significant words from product name, excluding generic
+    all_words = [w for w in name_lower.split() if len(w) >= 3]
+    meaningful_words = [w for w in all_words if w not in _GENERIC_WORDS]
+    if not meaningful_words:
+        return None
+
+    # Tier 2: Species-gated fuzzy matching
+    if species_words:
+        best_url, best_score = _fuzzy_match(
+            meaningful_words, links, species_gate=species_words,
+        )
+        if best_url and best_score >= 0.3:
+            return best_url
+
+    # Tier 3: Fallback without species gate
+    best_url, best_score = _fuzzy_match(meaningful_words, links)
+    if best_url and best_score >= 0.3:
+        return best_url
+
+    return None
+
+
+def _fuzzy_match(
+    meaningful_words: list[str],
+    links: list[dict[str, str]],
+    species_gate: set[str] | None = None,
+) -> tuple[str | None, float]:
+    """Score links by meaningful word overlap, optionally gated by species."""
     best_url: str | None = None
-    best_count = 0
+    best_score: float = 0.0
     for link in links:
         link_lower = link.get("name", "").lower()
-        count = sum(1 for w in words if w in link_lower)
-        if count > best_count:
-            best_count = count
+        if not link_lower:
+            continue
+        if species_gate:
+            if not any(sw in link_lower for sw in species_gate):
+                continue
+        matched = sum(1 for w in meaningful_words if w in link_lower)
+        score = matched / len(meaningful_words)
+        if score > best_score:
+            best_score = score
             best_url = link.get("url")
-    return best_url if best_count >= 2 else None
+    return best_url, best_score
 
 
 ANALYZE_CURRENT_PRODUCT_TOOL = types.FunctionDeclaration(
@@ -76,6 +250,14 @@ SEARCH_STORE_TOOL = types.FunctionDeclaration(
                     "'msc certified shrimp', 'Alaska pollock'"
                 ),
             ),
+            "intent": types.Schema(
+                type=types.Type.STRING,
+                description=(
+                    "The user's original request that triggered this search, "
+                    "e.g. 'find me one with better aquaculture practices' or "
+                    "'show me a frozen wild-caught option from Alaska'"
+                ),
+            ),
         },
         required=["query"],
     ),
@@ -104,6 +286,23 @@ VOICE_SYSTEM_PROMPT = """\
 You are SeaSussed, an expert marine biologist and sustainable seafood shopping \
 companion — like a knowledgeable friend shopping alongside someone at an online \
 grocery store.
+
+ANALYZING GREETING (on "[greet-analyzing]" messages):
+The user just clicked Analyze and the score is still loading. You know NOTHING \
+yet — no species, no score, no grade, no data. You also don't know if it's \
+one product or many. Your ONLY job is to say ONE short sentence acknowledging \
+you're looking, then STOP TALKING. Do not add a second sentence. Do not give \
+any preview, opinion, warning, caution, advice, or commentary of any kind. \
+You will get the data later — wait for it.
+Good: "Hey! Let me take a look — I'll let you know what I find!"
+Good: "Alright, checking this out for you — I'll have results in just a sec."
+Good: "Taking a look now, I'll update you in a moment!"
+BAD: "Alright, taking this one..." — you don't know if it's one product or many.
+BAD: "Let me score this product for you." — you don't know it's a single product.
+ABSOLUTELY FORBIDDEN in analyzing greeting: "heads up", "be careful", "watch out", \
+"let's talk about", "interesting", "this one", "this product", or ANY phrase \
+that assumes a single product or sounds like an assessment. \
+You literally have no information yet. One neutral sentence, then silence.
 
 GREETING (on "[greet ...]" messages):
 You will receive a greeting prompt that includes the score result the user just saw. \
@@ -143,6 +342,8 @@ on this page."
 2. Highlight the best and worst options by name.
 3. Ask which product they'd like to know more about.
 Do NOT list every product — the scores are already visible in the panel.
+Do NOT proactively call search_store after a multi-product greeting. The user \
+already has multiple options on the page — only search if they ASK you to.
 
 WHEN YOU ALREADY HAVE PRODUCT DATA:
 If the greeting included a list of scored products, you already know their scores. \
@@ -172,6 +373,8 @@ Search for the BROAD product category, NOT specific sustainability terms. \
 The store's search doesn't understand sustainability — and pre-filtering means \
 you miss products that might score well. Instead, cast a wide net and let our \
 scoring algorithm find the best option from ALL results.
+- User wants best option overall / best fish / best score → search "fish" \
+  (NOT a specific species — cast the widest net so scoring can pick the true best)
 - User wants better shrimp → search "shrimp" (NOT "sustainable shrimp" or "MSC shrimp")
 - User wants best salmon → search "salmon" (NOT "wild Alaska sockeye salmon")
 - User wants grade A tuna → search "tuna" (NOT "pole caught tuna")
@@ -179,44 +382,45 @@ scoring algorithm find the best option from ALL results.
 The scoring system will automatically rank every result by sustainability. \
 Your job is to get ALL the options, not to pre-filter them.
 
-AFTER SEARCH RESULTS — TELL THE USER IMMEDIATELY (critical):
-The tool response includes a "summary" field — follow its instructions. \
-IMMEDIATELY tell the user what you found. Do NOT wait to be asked.
+INTENT FIELD — ALWAYS REQUIRED (critical):
+You MUST always pass the `intent` field when calling search_store. \
+Set it to the user's verbatim request that triggered the search. \
+The backend uses this to filter and rank results correctly — without it, \
+results will be ranked by overall score instead of what the user asked for. \
+Examples:
+- User: "find me one with better aquaculture practices" \
+  → search_store(query="salmon", intent="find me one with better aquaculture practices")
+- User: "show me a wild-caught option from Alaska" \
+  → search_store(query="salmon", intent="show me a wild-caught option from Alaska")
+- User: "what's the most sustainable shrimp they have?" \
+  → search_store(query="shrimp", intent="what's the most sustainable shrimp they have?")
 
-The search tool ONLY auto-navigates when the result scores HIGHER than the \
-user's current product. If the result is NOT better, you must ASK the user \
-before changing their page: "I found [product name] with a Grade [X] — want \
-me to pull it up so you can take a look?"
+AFTER SEARCH RESULTS — NAVIGATE IMMEDIATELY (critical):
+The tool response includes scored products with names, scores, grades, prices, \
+and URLs. Selection rules are in the tool response — follow them strictly. \
+The user's requested species MUST match — never substitute a different fish. \
+If the user asked for a "better" option, pick the highest-scored match. \
+Call navigate_to_product IMMEDIATELY, then briefly explain your pick.
 
-If the result IS better and the page was already opened, tell the user: \
-"I found [product name] with a Grade [X]. I've pulled it up for you — want \
-me to analyze it?"
+The page will auto-analyze once loaded — you'll get a context update with \
+the real score. Wait for that before discussing the score.
 
-NEVER navigate to a product that scores lower than what the user already has \
-without asking first.
+WAIT FOR COMPLETE REQUESTS (critical): \
+Never call a tool until you are certain the user has finished their sentence. \
+If a request sounds partial — they've named a category but haven't said what \
+they want, or the sentence feels unfinished — wait silently for them to \
+continue. Only act on requests that are clearly complete.
 
-NEVER just say "I found some results" or "I searched for tuna" without \
-immediately telling the user WHAT you found. The user cannot see your search \
-results — you are their only guide.
+TOOL CALLS — DO NOT NARRATE (critical): \
+The UI shows a visual status bar ("Searching...", "Analyzing...", "Navigating...") \
+so the user already knows what's happening. Do NOT announce tool calls. \
+Just call the tool silently. Speak AFTER you have results, not before. \
+Never narrate your process — no "Let me search", "I'm going to look", \
+"Okay searching now", etc. Just do it.
 
-ANNOUNCE YOUR INTENT BEFORE EVERY TOOL CALL (MANDATORY — highest priority):
-You MUST speak a sentence BEFORE calling any tool. This is NON-NEGOTIABLE. \
-The user hears silence while tools run (5-15 seconds). If you call a tool \
-without speaking first, the user thinks the app is broken.
-
-DO THIS — speak FIRST, THEN call the tool:
-- Before search_store: "Let me search this store for all their shrimp options \
-and find you the most sustainable one." THEN call search_store.
-- Before analyze_current_product: "Let me take a look at what's on your screen." \
-THEN call analyze_current_product.
-- Before search_store for alternatives: "I'll pull up everything they have and \
-score them for you." THEN call search_store.
-
-DO NOT DO THIS — calling the tool and THEN telling the user:
-- ❌ [calls search_store] → "I searched for shrimp and here's what I found"
-- ❌ [calls analyze_current_product] → "I just analyzed your page"
-
-The correct order is ALWAYS: speak intent → call tool → speak results.
+ANTI-REPETITION RULE (critical): \
+Never say the same thing twice in a turn. Never restate what you just said \
+in different words. One thought, one sentence, move on.
 
 AFTER RECEIVING A SCORE (from tool call) — respond conversationally:
 Treat the user as a new learner. Explain the 2–3 biggest factors in plain \
@@ -237,30 +441,20 @@ the score? Respond in 5–8 sentences, not a quick summary.
   — e.g. "This species is overfished in this region — catches have declined \
   significantly over the last decade" or "Without ASC certification, there's no \
   independent check on antibiotic use or environmental impact at the farm." \
-  End with: "Want me to dig into any of that, or should I search for a better option?"
+  End with: "I can dig into that or search alternatives. Let me know, I'll be here."
 - Grade D: Clear and direct. Explain the key problems so the user understands \
   the real impact. Proactively offer to search: \
-  "I can search this store for a better choice — want me to?"
+  "Let me know if you'd like me to search for alternatives — I'll be here."
 
-AFTER SEARCH RESULTS — BE HONEST ABOUT WHAT YOU FOUND (critical):
-The search tool response includes a comparison to the user's current product. \
-Pay close attention to it:
-- If the best result scores HIGHER than the current product, recommend it \
-  enthusiastically.
-- If the best result scores LOWER or the SAME, be honest: "I looked through \
-  what they have, and actually your current pick is the best option here." \
-  Do NOT suggest searching again or trying different terms — if the store \
-  doesn't have something better, just say so and affirm their current choice.
-- If no seafood was found at all, say so: "Doesn't look like they have that \
-  in stock. Your current choice is still solid."
-Never push the user to keep searching when the store simply doesn't carry \
-a better option. Respect the results.
+AFTER SEARCH RESULTS — HOW SCORING WORKS (critical):
+Search results include rough ESTIMATE scores from listing text only (product \
+names, no images or detail). Use these to compare options against EACH OTHER \
+and pick the best match for the user's request — but do NOT quote these \
+scores to the user. The real score comes after navigating to the product \
+page for full analysis. Tell the user the full score is loading.
 
-IMPORTANT: If the user specifically ASKED you to find the best option (e.g. \
-"find me the most sustainable tuna") and the search returned a top result, \
-do NOT immediately suggest searching for something even better. They already \
-asked for the best and you found it. Instead, share why it scored well and \
-ask if they want you to open the page.
+If no seafood was found at all, say so: "Doesn't look like they have that \
+in stock."
 
 Keep spoken responses conversational: 5–8 sentences for score explanations, \
 3–5 sentences for follow-ups. The full score card is visible in the panel so \
@@ -299,6 +493,24 @@ relevant — don't list them robotically. Examples:
 Only mention food_miles if the distance is notable (over 1000 miles) or the user \
 seems interested in where their food comes from. Always mention high mercury.
 
+LIVE UPDATES (two phases):
+You will receive updates as the analysis progresses:
+
+1. [context-update-identified] — The product has been identified but the score is \
+   still being calculated. Say a brief acknowledgment like "I'll have the full \
+   results for you in just a moment" then STOP. Do NOT share species background \
+   or facts — just let the user know results are coming.
+
+2. [context-update-final] — The full results including score and alternatives are in. \
+   THIS is when you announce the score. Transition naturally: "OK, the results are \
+   in!" or "Alright, so here's how it scored..." Then give your grade-appropriate \
+   assessment (see guidelines above). ONLY share NEW information — the score, what \
+   drove it, and alternatives. Do NOT re-explain species facts, health info, or \
+   background you already covered in the identified phase.
+
+For both: finish your current sentence naturally before transitioning — don't cut \
+yourself off mid-word.
+
 HONESTY RULE (hard):
 Never claim certainty about information not visible on the page. If species, origin, \
 or fishing method wasn't shown, acknowledge it: "They don't list where it's from, \
@@ -333,6 +545,12 @@ class VoiceSession:
         self.product_links: list[dict[str, str]] = []
         self.current_grade: str = ""
         self.current_score: int = 0
+        self.current_breakdown: dict[str, int] = {}
+        self._awaiting_search_result: bool = False
+        self._last_search_query: str = ""
+        self._last_search_time: float = 0.0
+        self._last_navigate_url: str = ""
+        self._last_navigate_time: float = 0.0
 
     async def run(self) -> None:
         try:
@@ -397,8 +615,30 @@ class VoiceSession:
         ctx = self.greeting_context
         all_products = ctx.get("all_products") if ctx else None
 
+        if ctx and ctx.get("analyzing"):
+            text = (
+                "[greet-analyzing] The user just clicked Analyze. "
+                "Say ONE short, casual acknowledgement — like 'On it!' or "
+                "'Let me take a look.' then STOP immediately. "
+                "Do NOT say 'in a moment', 'shortly', 'results coming', "
+                "or anything about waiting. No second sentence."
+            )
+            log.info("Sending analyzing greeting to Gemini")
+            try:
+                await session.send_client_content(
+                    turns=types.Content(
+                        role="user", parts=[types.Part(text=text)]
+                    ),
+                    turn_complete=True,
+                )
+            except Exception as e:
+                log.error("Failed to send greeting: %s", e, exc_info=True)
+            return
+
+        listing_summary = ctx.get("listing_summary") if ctx else None
+
         if all_products and len(all_products) > 1:
-            # Multi-product page — send all scored products as context
+            # Multi-product page — send scored products + written summary
             lines = []
             for p in all_products:
                 name = p.get("product_name") or p.get("species") or "unknown"
@@ -408,12 +648,28 @@ class VoiceSession:
                     f"({p.get('wild_or_farmed', 'unknown')})"
                 )
             product_list = "\n".join(lines)
-            text = (
-                f"[greet-multi] The user just scored {len(all_products)} "
-                f"seafood products on this page:\n{product_list}\n"
-                f"Greet them and give a brief overview of the best and "
-                f"worst options."
-            )
+            if listing_summary:
+                text = (
+                    f"[greet-multi] The user just scored "
+                    f"{len(all_products)} seafood products on this "
+                    f"page:\n{product_list}\n\n"
+                    f"Here is the written summary already shown in "
+                    f"the panel:\n{listing_summary}\n\n"
+                    f"Speak this summary to the user in a natural, "
+                    f"conversational way. Don't read it word-for-word "
+                    f"— paraphrase it as spoken advice. Then ask which "
+                    f"product they'd like to know more about. "
+                    f"Do NOT call search_store — they already have "
+                    f"multiple options on this page."
+                )
+            else:
+                text = (
+                    f"[greet-multi] The user just scored "
+                    f"{len(all_products)} seafood products on this "
+                    f"page:\n{product_list}\n"
+                    f"Greet them and give a brief overview of the "
+                    f"best and worst options."
+                )
         elif ctx:
             grade = ctx.get("grade", "")
             score = ctx.get("score", 0)
@@ -470,6 +726,29 @@ class VoiceSession:
                 if msg.get("grade"):
                     self.current_grade = msg["grade"]
                     self.current_score = msg.get("score", 0)
+                    bd = msg.get("breakdown") or {}
+                    if bd:
+                        self.current_breakdown = {
+                            "biological": int(bd.get("biological", 0)),
+                            "practices": int(bd.get("practices", 0)),
+                            "management": int(bd.get("management", 0)),
+                            "ecological": int(bd.get("ecological", 0)),
+                        }
+            elif msg_type == "context_update":
+                update_text = self._format_context_update(msg)
+                if not update_text:
+                    continue
+                try:
+                    await session.send_client_content(
+                        turns=types.Content(
+                            role="user",
+                            parts=[types.Part(text=update_text)],
+                        ),
+                        turn_complete=True,
+                    )
+                    log.info("Sent context update to Gemini")
+                except Exception as e:
+                    log.warning("Failed to send context update: %s", e)
             elif msg_type == "stop":
                 log.info("Client requested stop")
                 break
@@ -492,23 +771,24 @@ class VoiceSession:
                             log.info("First audio chunk sent to client")
 
                     if response.tool_call:
-                        # Announce tool intent via TTS before executing
                         tool_names = [
                             fc.name
                             for fc in response.tool_call.function_calls
                         ]
+                        for fc in response.tool_call.function_calls:
+                            log.info(
+                                "GEMINI TOOL CALL: %s(%s)",
+                                fc.name,
+                                fc.args,
+                            )
                         if "search_store" in tool_names:
                             await self.ws.send_json(
                                 {"type": "status", "state": "searching"}
                             )
-                            # Give Gemini's spoken announcement time to
-                            # play before the tool starts executing
-                            await asyncio.sleep(ANNOUNCE_DELAY_S)
                         elif "analyze_current_product" in tool_names:
                             await self.ws.send_json(
                                 {"type": "status", "state": "analyzing"}
                             )
-                            await asyncio.sleep(ANNOUNCE_DELAY_S)
                         elif "navigate_to_product" in tool_names:
                             await self.ws.send_json(
                                 {"type": "status", "state": "navigating"}
@@ -526,14 +806,62 @@ class VoiceSession:
                                     )
                                 elif fc.name == "search_store":
                                     query = (fc.args or {}).get("query", "")
-                                    result = await self._handle_search_store(
-                                        query
-                                    )
+                                    intent = (fc.args or {}).get("intent", "")
+                                    now = time.monotonic()
+                                    if (
+                                        query == self._last_search_query
+                                        and now - self._last_search_time
+                                        < TOOL_COOLDOWN_S
+                                    ):
+                                        log.warning(
+                                            "Suppressed duplicate "
+                                            "search_store('%s')",
+                                            query,
+                                        )
+                                        result = {
+                                            "query": query,
+                                            "products": [],
+                                            "summary": (
+                                                "Search already performed "
+                                                "— use the results above."
+                                            ),
+                                        }
+                                    else:
+                                        self._last_search_query = query
+                                        self._last_search_time = now
+                                        result = (
+                                            await self._handle_search_store(
+                                                query, intent,
+                                            )
+                                        )
                                 elif fc.name == "navigate_to_product":
                                     url = (fc.args or {}).get("url", "")
-                                    result = (
-                                        await self._handle_navigate_to_product(url)
-                                    )
+                                    now = time.monotonic()
+                                    if (
+                                        url == self._last_navigate_url
+                                        and now - self._last_navigate_time
+                                        < TOOL_COOLDOWN_S
+                                    ):
+                                        log.warning(
+                                            "Suppressed duplicate "
+                                            "navigate_to_product"
+                                        )
+                                        result = {
+                                            "success": True,
+                                            "url": url,
+                                            "instruction": (
+                                                "Already navigating to "
+                                                "this page."
+                                            ),
+                                        }
+                                    else:
+                                        self._last_navigate_url = url
+                                        self._last_navigate_time = now
+                                        result = (
+                                            await self._handle_navigate_to_product(
+                                                url
+                                            )
+                                        )
                                 else:
                                     result = {"error": f"Unknown tool: {fc.name}"}
                             except Exception as tool_err:
@@ -562,7 +890,29 @@ class VoiceSession:
                                 "send_tool_response failed: %s", send_err,
                                 exc_info=True,
                             )
+                            # Tell client we're back to listening
+                            try:
+                                await self.ws.send_json(
+                                    {"type": "status", "state": "listening"}
+                                )
+                            except Exception:
+                                pass
                             return  # session is broken, exit cleanly
+
+                    # Log transcript text from Gemini's response
+                    if (
+                        response.server_content
+                        and getattr(
+                            response.server_content, "model_turn", None
+                        )
+                    ):
+                        for part in (
+                            response.server_content.model_turn.parts or []
+                        ):
+                            if hasattr(part, "text") and part.text:
+                                log.info(
+                                    "GEMINI TRANSCRIPT: %s", part.text
+                                )
 
                     if (
                         response.server_content
@@ -630,6 +980,10 @@ class VoiceSession:
                 certifications=[],
             )
 
+        # Non-seafood: skip scoring entirely, tell Gemini immediately
+        if not product_info.is_seafood:
+            return {"not_seafood": True}
+
         # Fast path: pure Python scoring + template explanation (no extra
         # Gemini calls) — keeps total tool time under ~8 s.
         breakdown, score, grade = compute_score(product_info)
@@ -653,6 +1007,12 @@ class VoiceSession:
         # Track current product for search comparisons
         self.current_grade = score_result.grade
         self.current_score = score_result.score
+        self.current_breakdown = {
+            "biological": int(score_result.breakdown.biological),
+            "practices": int(score_result.breakdown.practices),
+            "management": int(score_result.breakdown.management),
+            "ecological": int(score_result.breakdown.ecological),
+        }
 
         await self.ws.send_json({
             "type": "score_result",
@@ -668,15 +1028,19 @@ class VoiceSession:
             "certifications": score_result.product_info.certifications,
             "fishing_method": score_result.product_info.fishing_method,
             "explanation": score_result.explanation,
-            "not_seafood": not score_result.product_info.is_seafood,
+            "not_seafood": False,
             "health_advisory": (
                 score_result.health.mercury_category if score_result.health else None
             ),
         }
 
-    async def _handle_search_store(self, query: str) -> dict[str, Any]:
+    async def _handle_search_store(
+        self,
+        query: str,
+        intent: str = "",
+    ) -> dict[str, Any]:
         """Search the grocery store and return scored products."""
-        log.info("Searching store for: %s", query)
+        log.info("Searching store for: %s (intent: %s)", query, intent or "none")
         self.search_event.clear()
         self.search_data = None
 
@@ -684,23 +1048,45 @@ class VoiceSession:
 
         try:
             await asyncio.wait_for(
-                self.search_event.wait(), timeout=SCREENSHOT_TIMEOUT_S + 5.0
+                self.search_event.wait(), timeout=SCREENSHOT_TIMEOUT_S + 15.0
             )
         except asyncio.TimeoutError:
             log.warning("Store search timed out")
             return {"error": "Store search timed out", "products": []}
 
         msg = self.search_data
-        if msg is None or (not msg.get("data") and not msg.get("page_text")):
+        page_text = msg.get("page_text", "") if msg else ""
+        log.info(
+            "Search results received: %d chars page_text, %d product_links",
+            len(page_text),
+            len(msg.get("product_links", [])) if msg else 0,
+        )
+        if page_text:
+            log.info("Search page_text preview: %s", page_text[:300])
+
+        if msg is None or (not msg.get("data") and not page_text):
             return {"error": "No search results received", "products": []}
 
         page_analysis = await analyze_screenshot(
             msg["data"], msg.get("url", ""), msg.get("page_title", ""),
-            page_text=msg.get("page_text", ""),
+            page_text=page_text,
         )
 
         seafood = [p for p in page_analysis.products if p.is_seafood]
+        log.info(
+            "Search analysis: %d total products, %d seafood (page_type=%s)",
+            len(page_analysis.products),
+            len(seafood),
+            page_analysis.page_type,
+        )
         if not seafood:
+            log.warning(
+                "No seafood found in search for '%s' — "
+                "page_text was %d chars, %d products extracted (all non-seafood)",
+                query,
+                len(page_text),
+                len(page_analysis.products),
+            )
             return {"query": query, "products": [], "message": "No seafood found"}
 
         # Match scraped product URLs to extracted products by name overlap
@@ -712,93 +1098,148 @@ class VoiceSession:
             breakdown, total, grade = compute_score(p)
             name = p.product_name or p.species or "unknown"
             # Find matching URL from scraped links
-            url = _find_product_url(name, product_links)
+            url = _find_product_url(name, product_links, species=p.species)
             entry: dict[str, Any] = {
                 "product_name": name,
                 "species": p.species,
                 "wild_or_farmed": p.wild_or_farmed,
                 "score": total,
                 "grade": grade,
+                "biological": int(breakdown.biological),
+                "practices": int(breakdown.practices),
+                "management": int(breakdown.management),
+                "ecological": int(breakdown.ecological),
             }
+            if p.origin_region:
+                entry["origin_region"] = p.origin_region
+            if p.fishing_method:
+                entry["fishing_method"] = p.fishing_method
+            if p.price:
+                entry["price"] = p.price
             if url:
                 entry["url"] = url
             scored_products.append(entry)
 
-        scored_products.sort(key=lambda x: x["score"], reverse=True)
-        log.info("Store search returned %d products", len(scored_products))
-
-        # Filter: only recommend products that score higher than current
-        better_products = [
-            p for p in scored_products
-            if p["score"] > self.current_score
-        ] if self.current_score > 0 else scored_products
-
-        # Use the better list for navigation, but keep full list for context
-        nav_target = better_products[0] if better_products else (
-            scored_products[0] if scored_products else None
-        )
-
-        # Only auto-navigate if the result is BETTER than current product
-        navigated = False
-        is_better = (
-            nav_target is not None
-            and nav_target["score"] > self.current_score
-            and self.current_score > 0
-        )
-        if is_better and nav_target and "url" in nav_target:
-            await self.ws.send_json(
-                {"type": "status", "state": "navigating"}
+        # Filter by user intent (apples-to-apples comparison)
+        pre_filter_count = len(scored_products)
+        scored_products = _filter_by_intent(scored_products, intent)
+        if len(scored_products) < pre_filter_count:
+            log.info(
+                "Intent filter '%s' narrowed %d → %d products",
+                intent, pre_filter_count, len(scored_products),
             )
-            await self.ws.send_json(
-                {"type": "navigate", "url": nav_target["url"]}
-            )
-            navigated = True
-            log.info("Auto-navigated to better product: %s", nav_target["url"])
 
-        # Build explicit summary so Gemini clearly presents results
-        if nav_target:
-            best = nav_target
-            best_name = best["product_name"]
-            is_better = best["score"] > self.current_score
-            comparison = ""
-            if self.current_grade and is_better:
-                comparison = (
-                    f" That's better than the current product "
-                    f"(Grade {self.current_grade}, {self.current_score}/100)."
+        sort_field = _sort_key_for_intent(intent)
+        scored_products.sort(key=lambda x: x[sort_field], reverse=True)
+        log.info(
+            "Store search returned %d products (sorted by %s)",
+            len(scored_products), sort_field,
+        )
+        for sp in scored_products:
+            log.info(
+                "  [search result] %s — total:%d bio:%d prac:%d mgmt:%d eco:%d",
+                sp["product_name"], sp["score"],
+                sp["biological"], sp["practices"], sp["management"], sp["ecological"],
+            )
+
+        # Flag so context_update knows the next navigation is search-triggered
+        if scored_products:
+            self._awaiting_search_result = True
+
+        # Build a product list so Gemini can choose based on user intent
+        # (price, sustainability, similarity, etc.).  Scores are rough
+        # estimates from listing text — the real score comes after
+        # navigating to the detail page.
+        if scored_products:
+            product_lines = []
+            for i, p in enumerate(scored_products[:6], 1):
+                wf = p.get("wild_or_farmed", "unknown")
+                prac_label = (
+                    "aquaculture_practices"
+                    if wf == "farmed"
+                    else "fishing_practices"
                 )
-            elif self.current_grade and not is_better:
-                comparison = (
-                    f" NOTE: This is NOT better than the current product "
-                    f"(Grade {self.current_grade}, {self.current_score}/100). "
-                    f"Be honest — tell the user the best you found doesn't "
-                    f"beat what they have. Their current product is the "
-                    f"better choice."
+                line = (
+                    f"{i}. {p['product_name']} ({wf}) — "
+                    f"score {p['score']}/100 (grade {p['grade']}) — "
+                    f"biological: {p['biological']}/20, "
+                    f"{prac_label}: {p['practices']}/25, "
+                    f"management: {p['management']}/30, "
+                    f"ecological: {p['ecological']}/25"
                 )
-            if navigated:
-                summary = (
-                    f"Found {len(scored_products)} seafood products. "
-                    f"Best option: \"{best_name}\" (Grade {best['grade']}, "
-                    f"score {best['score']}/100).{comparison} "
-                    f"I've opened this page for you since it scores higher. "
-                    f"The score card is already updating with the full analysis. "
-                    f"Tell them what you found and that the card is updating now."
+                if p.get("origin_region"):
+                    line += f" — origin: {p['origin_region']}"
+                if p.get("fishing_method"):
+                    line += f" — method: {p['fishing_method']}"
+                if p.get("price"):
+                    line += f" — {p['price']}"
+                if p.get("url"):
+                    line += f" [url: {p['url']}]"
+                product_lines.append(line)
+            product_list = "\n".join(product_lines)
+
+            if sort_field != "score":
+                # List is pre-filtered AND pre-sorted by the requested factor.
+                ranking_note = (
+                    f"IMPORTANT: This list has been pre-filtered and pre-sorted "
+                    f"by \"{sort_field}\" to match the user's request "
+                    f"(\"{intent}\"). The #1 product has the highest "
+                    f"{sort_field} score among comparable options. "
+                    f"Pick product #1 whose species matches \"{query}\". "
+                    f"Do NOT re-sort by total score.\n\n"
                 )
-            elif is_better and "url" not in best:
-                summary = (
-                    f"Found {len(scored_products)} seafood products. "
-                    f"Best option: \"{best_name}\" (Grade {best['grade']}, "
-                    f"score {best['score']}/100).{comparison} "
-                    f"Tell the user to search this site for "
-                    f"\"{best_name}\" and click on it."
+                selection_rules = (
+                    f"SELECTION RULES:\n"
+                    f"1. Pick product #1 from the list whose species matches "
+                    f"\"{query}\". The ranking has already been done for you.\n"
+                    f"2. If the user asked for cheapest instead, pick the "
+                    f"cheapest matching-species product.\n\n"
                 )
             else:
-                summary = (
-                    f"Found {len(scored_products)} seafood products. "
-                    f"Best option: \"{best_name}\" (Grade {best['grade']}, "
-                    f"score {best['score']}/100).{comparison} "
-                    f"Do NOT navigate automatically. Ask the user if they "
-                    f"want you to open this product page."
-                )
+                ranking_note = ""
+                # Determine whether the user specified a particular species.
+                # Check intent first (user's actual words); fall back to query.
+                # If every meaningful word is a generic non-species word →
+                # pick the highest-scored product regardless of species.
+                _intent_words = {
+                    w.strip("?!.,'-")
+                    for w in (intent or query).lower().split()
+                    if len(w) >= 3
+                }
+                is_generic = not bool(_intent_words - _NON_SPECIES_INTENT_WORDS)
+                if is_generic:
+                    selection_rules = (
+                        "SELECTION RULES (follow in order):\n"
+                        "1. Pick the product with the HIGHEST overall score "
+                        "from this list, regardless of species.\n"
+                        "2. If the user asked for a DIFFERENT option, pick "
+                        "a different product than the one they were just viewing.\n"
+                        "3. If the user asked for cheapest, pick the "
+                        "cheapest product.\n\n"
+                    )
+                else:
+                    selection_rules = (
+                        f"SELECTION RULES (follow in order):\n"
+                        f"1. SPECIES MATCH IS MANDATORY — only pick a product "
+                        f"whose species matches what the user searched for "
+                        f"(\"{query}\"). Never pick a different species.\n"
+                        f"2. Pick the matching-species product with the HIGHEST score.\n"
+                        f"3. If the user asked for a DIFFERENT option, pick a "
+                        f"different product than the one they were just viewing.\n"
+                        f"4. If the user asked for cheapest, pick the cheapest "
+                        f"matching-species product.\n\n"
+                    )
+
+            summary = (
+                f"Found {len(scored_products)} seafood products "
+                f"for query \"{query}\":\n"
+                f"{product_list}\n\n"
+                f"{ranking_note}"
+                f"{selection_rules}"
+                f"IMMEDIATELY call navigate_to_product with the chosen "
+                f"product's URL. Do NOT repeat your intent multiple "
+                f"times — say ONE brief sentence, then call the tool."
+            )
         else:
             summary = (
                 f"No seafood found for \"{query}\". Suggest the user "
@@ -821,11 +1262,141 @@ class VoiceSession:
             "success": True,
             "url": url,
             "instruction": (
-                "The page is loading now and the score card is already "
-                "updating with the full analysis. Tell the user you've "
-                "opened the product page and that the analysis is underway."
+                "Say ONE brief sentence — like 'Ok, found something for you.' "
+                "or 'Got one, loading it now.' "
+                "Do NOT mention the species or product name. "
+                "Then STOP completely and wait silently for the score."
             ),
         }
+
+    def _format_context_update(self, msg: dict[str, Any]) -> str:
+        """Format a context_update message as text for Gemini."""
+        phase = msg.get("phase", "")
+
+        # Error or 404 page — screen analyzer found no seafood after navigation
+        if msg.get("page_type") == "no_seafood":
+            was_search = self._awaiting_search_result
+            self._awaiting_search_result = False
+            if was_search:
+                return (
+                    "[context-update-error] The product page failed to load — "
+                    "it appears to be a 404 or error page. "
+                    "Say ONE sentence: 'That link didn't work.' "
+                    "Then immediately call search_store with the same species "
+                    "query to find a working alternative. "
+                    "Do NOT ask the user anything — just search again silently."
+                )
+            return (
+                "[context-update-no-seafood] No seafood product was found on "
+                "this page. Tell the user in one sentence. "
+                "Offer to check something else when they're ready."
+            )
+
+        if phase == "scored":
+            # Search flow: navigate_to_product already spoke; stay silent until
+            # the complete phase arrives with the real score.
+            if self._awaiting_search_result:
+                return ""
+
+            return (
+                "[context-update-identified] "
+                "The sustainability assessment is now building. "
+                "Say ONE short sentence — like 'Ok, building the assessment.' "
+                "Do NOT say 'in a moment', 'shortly', 'results coming', "
+                "or anything implying a wait. Do NOT mention the species "
+                "or product name. Then STOP."
+            )
+
+        # Product listing: multiple products scored
+        if msg.get("page_type") == "product_listing":
+            all_products = msg.get("all_products") or []
+            listing_summary = msg.get("listing_summary") or ""
+            lines = []
+            for p in all_products:
+                name = (
+                    p.get("product_name")
+                    or p.get("species")
+                    or "unknown"
+                )
+                lines.append(
+                    f"- {name}: Grade {p.get('grade')}, "
+                    f"Score {p.get('score')}/100 "
+                    f"({p.get('wild_or_farmed', 'unknown')})"
+                )
+            product_list = "\n".join(lines)
+
+            closing = (
+                "End by telling them: tap a product card from this list "
+                "to go to that product page, or select another product "
+                "from the website to score."
+            )
+            if listing_summary:
+                return (
+                    f"[context-update-listing] The results are in! "
+                    f"We scored {len(all_products)} seafood products "
+                    f"on this page:\n{product_list}\n\n"
+                    f"Written summary shown in the panel:\n"
+                    f"{listing_summary}\n\n"
+                    f"Speak this summary naturally — paraphrase it as "
+                    f"spoken advice, don't read it word-for-word. "
+                    f"{closing}"
+                )
+            return (
+                f"[context-update-listing] The results are in! "
+                f"We scored {len(all_products)} seafood products "
+                f"on this page:\n{product_list}\n"
+                f"Give a brief overview of the best and worst options. "
+                f"{closing}"
+            )
+
+        # Complete phase: final score + alternatives (single product)
+        grade = msg.get("grade", "?")
+        score_val = msg.get("score", 0)
+        # Track current product for search comparisons
+        if grade != "?":
+            self.current_grade = str(grade)
+            self.current_score = int(score_val)
+            bd = msg.get("breakdown") or {}
+            if bd:
+                self.current_breakdown = {
+                    "biological": int(bd.get("biological", 0)),
+                    "practices": int(bd.get("practices", 0)),
+                    "management": int(bd.get("management", 0)),
+                    "ecological": int(bd.get("ecological", 0)),
+                }
+
+        from_search = ""
+        if self._awaiting_search_result:
+            from_search = (
+                "This is the product from your search — "
+                "now you have the full, accurate score. "
+            )
+            self._awaiting_search_result = False
+
+        parts = [
+            f"[context-update-final] {from_search}"
+            f"RESPOND NOW — tell the user the results are in. "
+            f"Grade {grade}, {score_val}/100. "
+            f"Give your grade-appropriate assessment (see guidelines)."
+        ]
+
+        alts = msg.get("alternatives") or []
+        if alts:
+            alt_lines = []
+            for a in alts[:3]:
+                alt_species = a.get("species", "unknown")
+                alt_grade = a.get("grade", "?")
+                reason = a.get("reason", "")
+                alt_lines.append(
+                    f"- {alt_species}: Grade {alt_grade} — {reason}"
+                )
+            parts.append("Alternatives:\n" + "\n".join(alt_lines))
+
+        explanation = msg.get("explanation")
+        if explanation:
+            parts.append(f"Explanation: {explanation}")
+
+        return "\n".join(parts)
 
     async def _keepalive(self) -> None:
         while True:

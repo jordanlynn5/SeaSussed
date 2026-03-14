@@ -147,8 +147,17 @@ async function capturePageData(tabId, url) {
   const screenshot = dataUrl.split(',')[1];
   const pageText = domResult[0]?.result ?? '';
   const imageUrls = imageUrlsResult[0]?.result ?? [];
-  const relatedProducts = relatedResult[0]?.result ?? [];
+  const rawRelated = relatedResult[0]?.result ?? [];
   const pageTitle = titleResult[0]?.result ?? '';
+
+  // Split {title, url}[] into backward-compat string[] + new URL map (drop null-URL entries)
+  const relatedProductsWithUrls = Array.isArray(rawRelated)
+    ? rawRelated.filter(r => typeof r === 'object' && r !== null && r.url)
+                .map(r => ({ ...r, url: cleanProductUrl(r.url) }))
+    : [];
+  const relatedProducts = Array.isArray(rawRelated)
+    ? rawRelated.filter(r => typeof r === 'object' && r !== null).map(r => r.title)
+    : [];
 
   // Fetch product gallery images in parallel (max 5, 5s timeout each)
   const imagePromises = imageUrls.slice(0, 5).map(u => fetchImageAsBase64(u));
@@ -158,7 +167,8 @@ async function capturePageData(tabId, url) {
   console.log(`[SeaSussed] Captured: screenshot + ${productImages.length} gallery images + ${pageText.length} chars DOM text`);
 
   return {
-    screenshot, pageTitle, pageText, productImages, relatedProducts, url,
+    screenshot, pageTitle, pageText, productImages,
+    relatedProducts, relatedProductsWithUrls, url,
   };
 }
 
@@ -188,14 +198,22 @@ async function handleAnalyze(tabId, url) {
   const dataUrl = await captureVisibleTab(tabId);
   const base64 = dataUrl.split(',')[1];
 
-  // 2. Scrape related product titles from page DOM
+  // 2. Scrape related product titles + URLs from page DOM
   let relatedProducts = [];
+  let relatedProductsWithUrls = [];
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func: scrapeRelatedProducts,
     });
-    relatedProducts = results[0]?.result ?? [];
+    const rawRelated = results[0]?.result ?? [];
+    relatedProductsWithUrls = Array.isArray(rawRelated)
+      ? rawRelated.filter(r => typeof r === 'object' && r !== null && r.url)
+                  .map(r => ({ ...r, url: cleanProductUrl(r.url) }))
+      : [];
+    relatedProducts = Array.isArray(rawRelated)
+      ? rawRelated.filter(r => typeof r === 'object' && r !== null).map(r => r.title)
+      : [];
   } catch (_) {
     // DOM scraping is best-effort; don't fail the main analysis
   }
@@ -219,6 +237,7 @@ async function handleAnalyze(tabId, url) {
       url: url,
       page_title: pageTitle,
       related_products: relatedProducts,
+      related_products_with_urls: relatedProductsWithUrls,
     }),
     signal: AbortSignal.timeout(45000),
   });
@@ -231,6 +250,20 @@ async function handleAnalyze(tabId, url) {
   return await response.json();
 }
 
+// ── Clean product URLs (strip session tokens from Amazon Fresh URLs) ──
+function cleanProductUrl(url) {
+  if (!url) return url;
+  try {
+    const parsed = new URL(url);
+    // Amazon: extract just the stable dp/ASIN path, strip all session tokens
+    if (/amazon\.(com|co\.uk|ca|de|fr|es|it|co\.jp|com\.au)$/.test(parsed.hostname)) {
+      const dpMatch = parsed.pathname.match(/\/(dp|gp\/product)\/([A-Z0-9]{10})/);
+      if (dpMatch) return `https://${parsed.hostname}${dpMatch[0]}`;
+    }
+    return url;
+  } catch (_) { return url; }
+}
+
 // ── Store search URL patterns ──
 const SEARCH_URL_PATTERNS = {
   'www.wholefoodsmarket.com': (q) => `https://www.wholefoodsmarket.com/search?text=${encodeURIComponent(q)}`,
@@ -239,7 +272,7 @@ const SEARCH_URL_PATTERNS = {
   'www.kroger.com': (q) => `https://www.kroger.com/search?query=${encodeURIComponent(q)}`,
   'www.safeway.com': (q) => `https://www.safeway.com/shop/search-results.html?q=${encodeURIComponent(q)}`,
   'www.target.com': (q) => `https://www.target.com/s?searchTerm=${encodeURIComponent(q)}`,
-  'www.amazon.com': (q) => `https://www.amazon.com/s?k=${encodeURIComponent(q)}&i=amazonfresh`,
+  'www.amazon.com': (q) => `https://www.amazon.com/s?k=${encodeURIComponent(q)}&i=grocery`,
 };
 
 function buildSearchUrl(siteUrl, query) {
@@ -259,6 +292,8 @@ async function searchStoreForVoice(currentUrl, query) {
   const searchUrl = buildSearchUrl(currentUrl, query);
   if (!searchUrl) throw new Error('Cannot determine search URL for this site');
 
+  console.log('[SeaSussed] searchStoreForVoice — url:', searchUrl, 'query:', query);
+
   // Open search tab in background (invisible) — DOM-only, no screenshot needed
   const tab = await chrome.tabs.create({ url: searchUrl, active: false });
 
@@ -267,6 +302,7 @@ async function searchStoreForVoice(currentUrl, query) {
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         chrome.tabs.onUpdated.removeListener(listener);
+        console.log('[SeaSussed] Search tab load timed out (12s), scraping anyway');
         resolve(); // resolve anyway — we'll try scraping whatever is there
       }, 12000);
 
@@ -274,6 +310,7 @@ async function searchStoreForVoice(currentUrl, query) {
         if (tabId === tab.id && info.status === 'complete') {
           chrome.tabs.onUpdated.removeListener(listener);
           clearTimeout(timeout);
+          console.log('[SeaSussed] Search tab loaded');
           resolve();
         }
       }
@@ -293,6 +330,9 @@ async function searchStoreForVoice(currentUrl, query) {
               const sels = [
                 '[data-testid*="product"]', '[class*="product"]', '[class*="Product"]',
                 '[data-component-type="s-search-result"]', 'main a img',
+                // Whole Foods / grocery-specific
+                '[class*="tile"]', '[class*="Tile"]', '[class*="item"]',
+                '[class*="grid"] a[href*="/product"]',
               ];
               for (const sel of sels) {
                 if (document.querySelectorAll(sel).length > 0) return true;
@@ -302,13 +342,13 @@ async function searchStoreForVoice(currentUrl, query) {
               return main ? main.innerText.trim().length > 200 : false;
             },
           });
-          if (result?.result || elapsed >= 6000) {
+          if (result?.result || elapsed >= 8000) {
             clearInterval(poll);
             // Brief extra pause for final render
             setTimeout(resolve, 500);
           }
         } catch {
-          if (elapsed >= 6000) { clearInterval(poll); resolve(); }
+          if (elapsed >= 8000) { clearInterval(poll); resolve(); }
         }
       }, 500);
     });
@@ -324,6 +364,9 @@ async function searchStoreForVoice(currentUrl, query) {
           '[class*="product-tile"]', '[class*="ProductTile"]', '[class*="product-item"]',
           '[class*="ProductItem"]', '.product', '[data-component-type="s-search-result"]',
           '[class*="search-result"]', 'li[class*="product"]',
+          // Whole Foods / grocery-specific
+          '[class*="tile"]', '[class*="Tile"]',
+          '[role="listitem"]', '[data-testid*="item"]',
         ];
         let cards = [];
         for (const sel of cardSelectors) {
@@ -334,13 +377,12 @@ async function searchStoreForVoice(currentUrl, query) {
           cards.forEach(card => {
             const text = card.innerText?.trim();
             if (!text || text.length <= 5 || text.length >= 500) return;
-            // Find the product link within the card
             const link = card.querySelector('a[href]');
             const url = link ? link.href : null;
             products.push({ text, url });
           });
         }
-        // Fallback: grab product title elements (often are links themselves)
+        // Fallback 1: grab product title elements (often are links themselves)
         if (products.length === 0) {
           const titleSels = [
             '[data-testid*="product"] h2 a', '[data-testid*="product"] h3 a',
@@ -359,12 +401,43 @@ async function searchStoreForVoice(currentUrl, query) {
             if (products.length > 0) break;
           }
         }
-        // Extra fallback: main content area (no URLs available)
+        // Fallback 2: all links in main content area that look like product pages
         if (products.length === 0) {
-          const main = document.querySelector('main, [role="main"], #main-content, #search-results');
-          if (main) return {
-            page_text: 'SEARCH RESULTS:\n' + main.innerText.trim().substring(0, 4000),
-            product_links: [],
+          const main = document.querySelector(
+            'main, [role="main"], #main-content, #search-results, #content'
+          );
+          const container = main || document.body;
+          container.querySelectorAll('a[href]').forEach(a => {
+            const text = a.innerText?.trim();
+            if (!text || text.length <= 5 || text.length >= 300) return;
+            const href = a.href || '';
+            // Skip navigation/utility links
+            if (/\/(cart|login|account|help|faq|about|contact|sign)/i.test(href)) return;
+            if (/^\s*(menu|sign in|log in|cart|help|close)\s*$/i.test(text)) return;
+            // Favor links that look like product pages
+            const isProductUrl = /\/(product|item|dp|p\/|pd\/|store\/)/i.test(href);
+            // Also accept links with reasonable product-name-like text (has spaces, lowercase)
+            const looksLikeProduct = text.includes(' ') && text.length >= 10;
+            if (isProductUrl || looksLikeProduct) {
+              products.push({ text, url: href });
+            }
+          });
+        }
+        // Final fallback: main content area text + any links found
+        if (products.length === 0) {
+          const container = document.querySelector(
+            'main, [role="main"], #main-content, #search-results, #content'
+          ) || document.body;
+          const links = [];
+          container.querySelectorAll('a[href]').forEach(a => {
+            const t = a.innerText?.trim();
+            if (t && t.length > 5 && t.length < 200 && a.href) {
+              links.push({ name: t, url: a.href });
+            }
+          });
+          return {
+            page_text: 'SEARCH RESULTS:\n' + container.innerText.trim().substring(0, 5000),
+            product_links: links.slice(0, 20),
           };
         }
         // Build page_text for Gemini analysis + product_links for navigation
@@ -380,7 +453,13 @@ async function searchStoreForVoice(currentUrl, query) {
     const scraped = domResult[0]?.result ?? { page_text: '', product_links: [] };
     // Handle both old string format and new object format
     const pageText = typeof scraped === 'string' ? scraped : (scraped.page_text || '');
-    const productLinks = typeof scraped === 'object' ? (scraped.product_links || []) : [];
+    const productLinks = (typeof scraped === 'object' ? (scraped.product_links || []) : [])
+      .map(p => ({ ...p, url: cleanProductUrl(p.url) }));
+
+    console.log('[SeaSussed] Search scraped:', pageText.length, 'chars text,', productLinks.length, 'links');
+    if (pageText.length < 100) {
+      console.warn('[SeaSussed] Search scrape looks thin! Text:', pageText.substring(0, 200));
+    }
 
     return {
       screenshot: '',
@@ -541,9 +620,15 @@ async function fetchImageAsBase64(url) {
 }
 
 // Injected function — runs in page context
+// Returns [{title: string, url: string | null}] for each product found.
 function scrapeRelatedProducts() {
   const selectors = [
+    // Amazon Fresh / Amazon search results
+    '[data-component-type="s-search-result"] h2',
+    '[data-asin] h2',
+    // Generic data-testid patterns
     '[data-testid*="product"] h2', '[data-testid*="product"] h3',
+    // Class-based patterns
     '.product-title', '.product-name',
     '[class*="ProductName"]', '[class*="product-title"]', '[class*="product-name"]',
     '[class*="ProductTitle"]',
@@ -553,15 +638,50 @@ function scrapeRelatedProducts() {
     '.w-pie--product-tile__content h2',
   ];
 
-  const titles = new Set();
+  const seen = new Set();
+  const results = [];
   for (const sel of selectors) {
     try {
       document.querySelectorAll(sel).forEach(el => {
         const text = el.innerText?.trim();
-        if (text && text.length > 3 && text.length < 150) titles.add(text);
+        if (!text || text.length <= 3 || text.length >= 150) return;
+        if (seen.has(text)) return;
+        seen.add(text);
+        // Find nearest <a> — look inside first (Amazon: <h2><a>title</a></h2>),
+        // then walk up (Whole Foods: <a><div><h2>title</h2></div></a>),
+        // then look inside the card container as last resort
+        let url = null;
+        const anchor = el.querySelector('a[href]') || el.closest('a[href]');
+        if (anchor) {
+          url = anchor.href || null;
+        } else {
+          const card = el.closest(
+            '[data-component-type="s-search-result"], [data-asin], ' +
+            '[data-testid*="product"], [class*="product-tile"], [class*="product-card"], ' +
+            '[class*="ProductTile"], [class*="ProductCard"], li, article'
+          );
+          if (card) {
+            const cardAnchor = card.querySelector('a[href]');
+            if (cardAnchor) url = cardAnchor.href || null;
+          }
+        }
+        // Skip nav/utility URLs and bare homepages
+        if (url) {
+          try {
+            const parsed = new URL(url);
+            const path = parsed.pathname.replace(/\/$/, '');
+            if (path === '' || /\/(cart|login|account|help|faq|about|contact|sign)/i.test(url)) {
+              url = null;
+            }
+          } catch (_) { url = null; }
+        }
+        results.push({ title: text, url });
       });
     } catch (_) {}
+    if (results.length >= 15) break; // stop once we have enough
   }
 
-  return [...titles].slice(0, 15);
+  console.log('[SeaSussed] scrapeRelatedProducts:', results.length, 'items,',
+    results.filter(r => r.url).length, 'with URLs', results.slice(0, 3));
+  return results.slice(0, 15);
 }

@@ -4,6 +4,7 @@
 [![Gemini](https://img.shields.io/badge/Gemini-2.5%20Flash-green.svg)]()
 [![Google ADK](https://img.shields.io/badge/Google%20ADK-1.17-orange.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Chapa Badge](https://chapa.thecreativetoken.com/u/jordanlynn5/badge.svg)](https://chapa.thecreativetoken.com/u/jordanlynn5)
 
 A Chrome extension powered by Gemini 2.5 Flash that gives you an instant sustainability score for any seafood product — right while you're shopping online.
 
@@ -86,6 +87,18 @@ Cloud Run (FastAPI)
 - **Extension:** Chrome Manifest V3, Vanilla JS
 - **Data:** SQLite (FishBase + NOAA FishWatch), Wolfram Alpha (food miles), ip-api.com (geolocation)
 - **Infrastructure:** Google Cloud Run (us-central1), Artifact Registry, Vertex AI
+
+### Google Cloud Services
+
+| Service | How It's Used |
+|---|---|
+| **Vertex AI** | Gemini 2.5 Flash for screenshot analysis (vision), sustainability scoring, and generating plain-language explanations |
+| **Vertex AI — Gemini Live API** | Real-time voice conversations via `gemini-live-2.5-flash-native-audio` for hands-free sustainability guidance |
+| **Google ADK** | Agent Development Kit (v1.17) orchestrates the screen analyzer agent with tool-use and structured output |
+| **Cloud Run** | Hosts the FastAPI backend — handles all Gemini calls, scoring, and voice WebSocket sessions |
+| **Artifact Registry** | Stores Docker images built from source during Cloud Run deployments |
+| **Cloud Build** | Builds container images from `backend/Dockerfile` as part of `gcloud run deploy --source` |
+| **Cloud Logging** | Backend request tracing, agent debugging, and error monitoring in production |
 
 ---
 

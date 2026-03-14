@@ -59,6 +59,8 @@ let _pendingScoreReveal = null; // held until 'complete' phase arrives
 
 // Build animation timers (cancelled if new data arrives mid-animation)
 let _buildTimers = [];
+let _cooldownInterval = null;
+let _latestHealth = null; // captured from SSE health phase for voice context
 function _scheduleBuild(fn, delay) { _buildTimers.push(setTimeout(fn, delay)); }
 function _cancelBuild() { _buildTimers.forEach(clearTimeout); _buildTimers = []; }
 
@@ -169,11 +171,13 @@ async function connectVoice(data, preStream = null) {
     await voiceClient.start(preStream);
     updateVoiceBar('listening');
     voiceClient.sendResultContext({
+      analyzing: data.analyzing || false,
       score: data.score,
       grade: data.grade,
       species: data.product_info?.species ?? null,
       wild_or_farmed: data.product_info?.wild_or_farmed ?? 'unknown',
       all_products: data.all_products ?? null,
+      listing_summary: data.listing_summary ?? null,
     });
   } catch (err) {
     console.warn('[SeaSussed] Voice start failed:', err.message);
@@ -219,17 +223,30 @@ async function startVoiceAfterResult(data) {
   }
 }
 
+const ANALYZE_BTN_IDS = ['analyze-btn', 'analyze-again-btn', 'list-analyze-again-btn'];
+function _setAnalyzeBtnsDisabled(disabled) {
+  ANALYZE_BTN_IDS.forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = disabled;
+  });
+}
+
 // ── Analyze ──
 async function triggerAnalyze() {
   _cancelBuild();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
 
+  _setAnalyzeBtnsDisabled(true);
   showView('view-loading');
   setLoadingStatus('Capturing page data…');
   // Reset health + food miles cards for new analysis
+  _latestHealth = null;
   document.getElementById('health-card').style.display = 'none';
   document.getElementById('food-miles-card').style.display = 'none';
+
+  // Start voice immediately — Gemini greets while analysis runs
+  startVoiceAfterResult({ analyzing: true });
 
   try {
     // Step 1: Capture screenshot + gallery images + DOM text via background.js
@@ -257,6 +274,7 @@ async function triggerAnalyze() {
         page_text: pageData.pageText,
         product_images: pageData.productImages,
         related_products: pageData.relatedProducts,
+        related_products_with_urls: pageData.relatedProductsWithUrls ?? [],
       }),
       signal: AbortSignal.timeout(60000),
     });
@@ -281,12 +299,18 @@ async function triggerAnalyze() {
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-        const data = JSON.parse(line.slice(6));
-        handleSSEEvent(data, pageData);
+        try {
+          const data = JSON.parse(line.slice(6));
+          handleSSEEvent(data, pageData);
+        } catch (parseErr) {
+          console.warn('[SeaSussed] SSE JSON parse error:', parseErr, line);
+        }
       }
     }
   } catch (err) {
     showError(err.message);
+  } finally {
+    _setAnalyzeBtnsDisabled(false);
   }
 }
 
@@ -344,6 +368,7 @@ function handleSSEEvent(data, pageData) {
   }
 
   if (data.phase === 'health') {
+    _latestHealth = data.health;
     renderHealthCard(data.health);
     return;
   }
@@ -360,18 +385,12 @@ function handleSSEEvent(data, pageData) {
   }
 
   if (data.phase === 'enriched') {
-    _cancelBuild();
-    // Research found new data — update score card
-    const { score, grade, breakdown, product_info } = data;
-    document.getElementById('grade-circle').textContent = grade;
-    document.getElementById('grade-circle').style.background = GRADE_COLORS[grade];
-    document.getElementById('grade-emoji-label').textContent = GRADE_LABELS[grade];
-    document.getElementById('grade-score-text').textContent = `${score}/100`;
-    // Flash the badge to indicate update
-    const badge = document.getElementById('grade-badge');
-    badge.classList.remove('fade-in');
-    void badge.offsetWidth; // force reflow
-    badge.classList.add('fade-in');
+    // Research found new data — update pending reveal with enriched score
+    // (do NOT set the grade badge directly — wait for 'complete' phase)
+    const { score, grade, product_info } = data;
+    if (_pendingScoreReveal) {
+      _pendingScoreReveal = { score, grade, color: GRADE_COLORS[grade] };
+    }
     // Update extraction tags with enriched data
     const tagsEl = document.getElementById('extraction-tags');
     tagsEl.innerHTML = '';
@@ -392,10 +411,40 @@ function handleSSEEvent(data, pageData) {
   }
 
   if (data.phase === 'complete') {
+    // Send final results to active voice session — this is when Gemini announces the score
+    if (voiceClient && data.result) {
+      voiceClient.sendContextUpdate({
+        phase: 'complete',
+        score: data.result.score,
+        grade: data.result.grade,
+        alternatives: data.result.alternatives,
+        alternatives_label: data.result.alternatives_label,
+        explanation: data.result.explanation,
+      });
+    } else if (voiceClient && data.page_type === 'product_listing' && data.products?.length > 0) {
+      voiceClient.sendContextUpdate({
+        phase: 'complete',
+        page_type: 'product_listing',
+        all_products: data.products.map(p => ({
+          product_name: p.product_name,
+          species: p.species,
+          wild_or_farmed: p.wild_or_farmed,
+          score: p.score,
+          grade: p.grade,
+        })),
+        listing_summary: data.summary || '',
+      });
+    } else if (voiceClient && data.page_type === 'no_seafood') {
+      voiceClient.sendContextUpdate({
+        phase: 'complete',
+        page_type: 'no_seafood',
+      });
+    }
+
     if (data.page_type === 'no_seafood') {
       showView('view-non-seafood');
     } else if (data.page_type === 'product_listing' && data.products?.length > 0) {
-      renderProductList(data.products);
+      renderProductList(data.products, data.summary || '', pageData?.relatedProductsWithUrls ?? []);
     } else if (data.result) {
       if (!data.result.product_info?.is_seafood) {
         showView('view-non-seafood');
@@ -404,11 +453,14 @@ function handleSSEEvent(data, pageData) {
       currentResult = data.result;
       renderResult(data.result);
     }
-    // Now that all results are in, reveal the score + grade
+    // Now that all results are in, reveal the score + grade.
+    // Use the complete phase's final data (enrichment may have changed the score).
     if (_pendingScoreReveal) {
-      const { score, grade, color } = _pendingScoreReveal;
+      const finalScore = data.result ? data.result.score : _pendingScoreReveal.score;
+      const finalGrade = data.result ? data.result.grade : _pendingScoreReveal.grade;
+      const finalColor = data.result ? GRADE_COLORS[finalGrade] : _pendingScoreReveal.color;
       _pendingScoreReveal = null;
-      _animateScoreReveal(score, grade, color);
+      _animateScoreReveal(finalScore, finalGrade, finalColor);
     }
   }
 }
@@ -426,6 +478,17 @@ function renderScorePhase(data) {
   gradeCircle.style.background = '#d1d5db';
   document.getElementById('grade-emoji-label').textContent = 'Building your score\u2026';
   document.getElementById('grade-score-text').innerHTML = '&nbsp;';
+
+  // Price — show immediately (available from vision step)
+  const priceEl = document.getElementById('grade-price');
+  if (priceEl) {
+    if (product_info.price) {
+      priceEl.textContent = product_info.price;
+      priceEl.style.display = '';
+    } else {
+      priceEl.style.display = 'none';
+    }
+  }
 
   // Clear content areas
   const tagsEl = document.getElementById('extraction-tags');
@@ -557,6 +620,24 @@ function renderScorePhase(data) {
 
   // Score reveal is deferred until 'complete' phase arrives
   _pendingScoreReveal = { score, grade, color };
+
+  // Send score to active voice session, or start voice as fallback
+  if (voiceClient) {
+    const update = {
+      phase: 'scored',
+      score,
+      grade,
+      species: product_info.species,
+      wild_or_farmed: product_info.wild_or_farmed,
+      origin_region: product_info.origin_region,
+      fishing_method: product_info.fishing_method,
+      explanation: data.explanation,
+    };
+    if (_latestHealth) update.health = _latestHealth;
+    voiceClient.sendContextUpdate(update);
+  } else {
+    startVoiceAfterResult({ score, grade, product_info });
+  }
 }
 
 function _animateScoreReveal(targetScore, grade, color) {
@@ -596,14 +677,48 @@ document.getElementById('non-seafood-back-btn')?.addEventListener('click', () =>
 document.getElementById('error-retry-btn')?.addEventListener('click', triggerAnalyze);
 document.getElementById('error-back-btn')?.addEventListener('click', () => showView('view-idle'));
 
+// ── Client-side URL matching for product cards ──
+const _URL_STOPWORDS = new Set(['the','a','an','of','and','or','in','at','to','with','for','lb','oz']);
+function _findUrl(productName, urlMap) {
+  if (!productName || !urlMap?.length) return null;
+  const nameLower = productName.trim().toLowerCase();
+  for (const entry of urlMap) {
+    const titleLower = (entry.title || '').trim().toLowerCase();
+    if (!titleLower || !entry.url) continue;
+    if (nameLower === titleLower) return entry.url;
+    if (nameLower.includes(titleLower) || titleLower.includes(nameLower)) return entry.url;
+  }
+  const nameTokens = new Set(nameLower.split(/\s+/).filter(t => !_URL_STOPWORDS.has(t) && t.length > 2));
+  let bestUrl = null, bestOverlap = 1;
+  for (const entry of urlMap) {
+    if (!entry.url) continue;
+    const titleTokens = new Set((entry.title || '').toLowerCase().split(/\s+/).filter(t => !_URL_STOPWORDS.has(t) && t.length > 2));
+    let overlap = 0;
+    for (const t of nameTokens) { if (titleTokens.has(t)) overlap++; }
+    if (overlap > bestOverlap) { bestOverlap = overlap; bestUrl = entry.url; }
+  }
+  return bestUrl;
+}
+
 // ── Render Product List (multi-product) ──
-function renderProductList(products) {
+function renderProductList(products, summary, urlMap = []) {
   const container = document.getElementById('product-list');
   const badge = document.getElementById('list-count-badge');
   if (!container) return;
 
   badge.textContent = products.length;
   container.innerHTML = '';
+
+  // Show comparative summary
+  const summaryEl = document.getElementById('listing-summary');
+  if (summaryEl) {
+    if (summary) {
+      summaryEl.textContent = summary;
+      summaryEl.style.display = '';
+    } else {
+      summaryEl.style.display = 'none';
+    }
+  }
 
   products.forEach(product => {
     const color = GRADE_COLORS[product.grade] || '#6b7280';
@@ -644,21 +759,58 @@ function renderProductList(products) {
         </div>`;
     }).join('');
 
+    const priceHtml = product.price
+      ? `<div class="list-price">${product.price}</div>` : '';
+
+    const productUrl = product.url || _findUrl(product.product_name, urlMap);
+
     item.innerHTML = `
-      <div class="list-header">
+      <div class="list-header${productUrl ? ' list-header-clickable' : ''}">
         <div class="list-grade-circle" style="background:${color}">${product.grade}</div>
         <div class="list-product-body">
           <div class="list-product-name" title="${product.product_name}">${product.product_name}</div>
           <div class="list-product-meta">${metaHtml}</div>
         </div>
-        <span class="list-score-text">${product.score}</span>
+        <div style="text-align:right; flex-shrink:0;">
+          <span class="list-score-text">${product.score}</span>
+          ${priceHtml}
+        </div>
         <span class="list-chevron">▶</span>
       </div>
       <div class="list-breakdown">${breakdownHtml}</div>`;
 
-    // Toggle expand/collapse
-    item.querySelector('.list-header').addEventListener('click', () => {
+    // Chevron always toggles expand/collapse (stops propagation so card click doesn't fire)
+    item.querySelector('.list-chevron').addEventListener('click', (e) => {
+      e.stopPropagation();
       item.classList.toggle('open');
+    });
+
+    // Card click: navigate to product page then auto-analyze
+    item.querySelector('.list-header').addEventListener('click', async () => {
+      if (productUrl) {
+        stopVoiceBar();
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return;
+        chrome.tabs.update(tab.id, { url: productUrl });
+
+        // Auto-analyze once the product page finishes loading
+        const tabId = tab.id;
+        let cleanup;
+        const timeout = setTimeout(() => { cleanup(); }, 20000);
+        const listener = (updatedId, info) => {
+          if (updatedId !== tabId || info.status !== 'complete') return;
+          cleanup();
+          // Brief pause for SPA rendering before analyzing
+          setTimeout(() => triggerAnalyze(), 1500);
+        };
+        cleanup = () => {
+          chrome.tabs.onUpdated.removeListener(listener);
+          clearTimeout(timeout);
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+      } else {
+        item.classList.toggle('open');
+      }
     });
 
     container.appendChild(item);
@@ -678,6 +830,7 @@ function renderProductList(products) {
         score: p.score,
         grade: p.grade,
       })),
+      listing_summary: summary || '',
     });
   }
 }
@@ -695,6 +848,17 @@ function renderResult(data) {
     document.getElementById('grade-circle').style.background = color;
     document.getElementById('grade-emoji-label').textContent = GRADE_LABELS[grade];
     document.getElementById('grade-score-text').textContent = `${score}/100`;
+  }
+
+  // Price
+  const priceEl = document.getElementById('grade-price');
+  if (priceEl) {
+    if (product_info.price) {
+      priceEl.textContent = product_info.price;
+      priceEl.style.display = '';
+    } else {
+      priceEl.style.display = 'none';
+    }
   }
 
   // Extraction tags
@@ -917,6 +1081,9 @@ function startCooldownUI(secondsRemaining) {
 
   let secs = secondsRemaining;
 
+  // Clear any existing cooldown timer to prevent leaks
+  if (_cooldownInterval) clearInterval(_cooldownInterval);
+
   BUTTON_IDS.forEach(id => {
     const btn = document.getElementById(id);
     if (!btn) return;
@@ -924,10 +1091,11 @@ function startCooldownUI(secondsRemaining) {
     btn.textContent = `Wait ${secs}s…`;
   });
 
-  const interval = setInterval(() => {
+  _cooldownInterval = setInterval(() => {
     secs -= 1;
     if (secs <= 0) {
-      clearInterval(interval);
+      clearInterval(_cooldownInterval);
+      _cooldownInterval = null;
       BUTTON_IDS.forEach(id => {
         const btn = document.getElementById(id);
         if (!btn) return;
