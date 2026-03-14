@@ -14,7 +14,9 @@ A Chrome extension powered by Gemini 2.5 Flash that gives you an instant sustain
 
 > **The backend is already deployed on Google Cloud Run. You only need to load the extension.**
 
-1. Clone this repo
+1. Download the code — either:
+   - **ZIP** (no git required): click **Code → Download ZIP** on this page, then unzip
+   - **Clone**: `git clone https://github.com/jordanlynn5/SeaSussed.git`
 2. Open `chrome://extensions` in Chrome
 3. Enable **Developer mode** (toggle, top right)
 4. Click **Load unpacked** → select the `extension/` folder
