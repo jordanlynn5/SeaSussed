@@ -21,8 +21,9 @@ build/
 htmlcov/
 .coverage
 
-# Data (built locally from scripts)
-backend/data/seafood.db
+# Data source files (built locally from scripts)
+backend/data/*.parquet
+backend/data/*.csv
 
 # Node / Extension dev
 node_modules/
