@@ -20,6 +20,12 @@ class VoiceClient {
     this._pendingNavigateUrl = null;
     this._navigateListener = null;
     this._navigateTimeout = null;
+    this._userInitiatedClose = false;
+    this._reconnectAttempts = 0;
+    this._maxReconnectAttempts = 3;
+    this._lastResultContext = null;
+    this._sessionEndCode = null;
+    this._sessionEndReason = null;
   }
 
   // ── Public API ──────────────────────────────────────────
@@ -63,24 +69,7 @@ class VoiceClient {
     console.log('[SeaSussed] WebSocket connected');
 
     // 6. Set up message and lifecycle handlers (AFTER _waitForOpen so they aren't overwritten)
-    this.ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        this._handleMessage(msg).catch(err => {
-          console.error('[SeaSussed] Error in _handleMessage:', err);
-        });
-      } catch (parseErr) {
-        console.error('[SeaSussed] Failed to parse WS message:', parseErr);
-      }
-    };
-    this.ws.onclose = (event) => {
-      console.warn('[SeaSussed] WebSocket closed — code:', event.code, 'reason:', event.reason || '(none)');
-      this.onStatus('ended');
-    };
-    this.ws.onerror = (event) => {
-      console.error('[SeaSussed] WebSocket error:', event);
-      this.onError('Connection error');
-    };
+    this._setupWsHandlers();
 
     // 7. Wire mic → AudioWorklet → WebSocket
     const source = this._micContext.createMediaStreamSource(this.micStream);
@@ -92,6 +81,7 @@ class VoiceClient {
   }
 
   sendResultContext(ctx) {
+    this._lastResultContext = ctx;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: 'result_context', ...ctx }));
   }
@@ -102,6 +92,7 @@ class VoiceClient {
   }
 
   stop() {
+    this._userInitiatedClose = true;
     if (this._navigateListener) {
       chrome.tabs.onUpdated.removeListener(this._navigateListener);
       this._navigateListener = null;
@@ -118,22 +109,7 @@ class VoiceClient {
       this.ws.close();
       this.ws = null;
     }
-    if (this.workletNode) {
-      this.workletNode.disconnect();
-      this.workletNode = null;
-    }
-    if (this.micStream) {
-      this.micStream.getTracks().forEach(t => t.stop());
-      this.micStream = null;
-    }
-    if (this._micContext) {
-      this._micContext.close();
-      this._micContext = null;
-    }
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
+    this._cleanupAudio();
   }
 
   // ── Private Methods ──────────────────────────────────────
@@ -183,6 +159,11 @@ class VoiceClient {
       case 'error':
         console.error('[SeaSussed] Error from server:', msg.message);
         this.onError(msg.message);
+        break;
+      case 'session_end':
+        console.warn('[SeaSussed] Session end:', msg.code, msg.reason);
+        this._sessionEndCode = msg.code;
+        this._sessionEndReason = msg.reason;
         break;
       case 'ping':
         break; // no-op keepalive
@@ -378,6 +359,108 @@ class VoiceClient {
       }
     }
     // Timed out — proceed anyway with whatever is rendered
+  }
+
+  _setupWsHandlers() {
+    this.ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        this._handleMessage(msg).catch(err => {
+          console.error('[SeaSussed] Error in _handleMessage:', err);
+        });
+      } catch (parseErr) {
+        console.error('[SeaSussed] Failed to parse WS message:', parseErr);
+      }
+    };
+    this.ws.onclose = (event) => {
+      const code = this._sessionEndCode || event.code;
+      console.warn('[SeaSussed] WebSocket closed — code:', code,
+        'frame:', event.code, 'reason:', this._sessionEndReason || event.reason || '(none)');
+      this._sessionEndCode = null;
+      this._sessionEndReason = null;
+
+      if (this._userInitiatedClose) {
+        this.onStatus('ended');
+        return;
+      }
+
+      if (code === 4000) {
+        this._cleanupAudio();
+        this.onStatus('expired');
+        return;
+      }
+
+      if (code === 4001) {
+        this._cleanupAudio();
+        this.onStatus('disconnected');
+        return;
+      }
+
+      if (code === 1005 || code === 1006) {
+        if (this._reconnectAttempts < this._maxReconnectAttempts) {
+          this.onStatus('reconnecting');
+          this._reconnect().catch(() => {
+            this._cleanupAudio();
+            this.onStatus('disconnected');
+          });
+          return;
+        }
+        this._cleanupAudio();
+        this.onStatus('disconnected');
+        return;
+      }
+
+      this.onStatus('ended');
+    };
+    this.ws.onerror = (event) => {
+      console.error('[SeaSussed] WebSocket error:', event);
+    };
+  }
+
+  async _reconnect() {
+    this._reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts - 1), 4000);
+    console.log(`[SeaSussed] Reconnect attempt ${this._reconnectAttempts}/${this._maxReconnectAttempts} in ${delay}ms`);
+    await new Promise(r => setTimeout(r, delay));
+
+    if (!this.micStream || this.micStream.getTracks().every(t => t.readyState === 'ended')) {
+      throw new Error('Mic stream ended during reconnect');
+    }
+
+    const wsUrl = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
+    this.ws = new WebSocket(wsUrl + '/voice');
+    await this._waitForOpen();
+
+    this._setupWsHandlers();
+
+    this.nextPlayTime = this.audioContext.currentTime;
+    this._receivedFirstAudio = false;
+
+    if (this._lastResultContext) {
+      this.sendResultContext(this._lastResultContext);
+    }
+
+    this._reconnectAttempts = 0;
+    console.log('[SeaSussed] Reconnected successfully');
+  }
+
+  _cleanupAudio() {
+    if (this.workletNode) {
+      this.workletNode.disconnect();
+      this.workletNode = null;
+    }
+    if (this.micStream) {
+      this.micStream.getTracks().forEach(t => t.stop());
+      this.micStream = null;
+    }
+    if (this._micContext) {
+      this._micContext.close();
+      this._micContext = null;
+    }
+    if (this.audioContext) {
+      this.audioContext.close();
+      this.audioContext = null;
+    }
   }
 
   _waitForOpen() {

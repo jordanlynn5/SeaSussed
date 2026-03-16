@@ -22,6 +22,7 @@ LIVE_MODEL = "gemini-live-2.5-flash-native-audio"
 SCREENSHOT_TIMEOUT_S = 8.0
 KEEPALIVE_INTERVAL_S = 30.0
 TOOL_COOLDOWN_S = 30.0
+WARMUP_GRACE_S = 5.0  # reject tool calls for N seconds after session start
 
 _GENERIC_WORDS = frozenset({
     "amazon", "grocery", "fresh", "brand", "oz",
@@ -361,6 +362,12 @@ Do NOT call analyze_current_product() for:
 - Products you already have scores for (answer from context instead)
 - General seafood questions (e.g., "is farmed salmon ever good?")
 
+NEVER ACT WITHOUT A USER REQUEST (critical):
+NEVER call any tool unless the user explicitly asks you to in their current turn. \
+Greeting context and page context are informational only — do not search, \
+analyze, or navigate based on them alone. Wait for a clear spoken request \
+from the user before calling any tool.
+
 SEARCHING THE STORE:
 Call search_store(query) to find alternatives on the grocery website the user \
 is browsing. Use this when:
@@ -373,7 +380,7 @@ Search for the BROAD product category, NOT specific sustainability terms. \
 The store's search doesn't understand sustainability — and pre-filtering means \
 you miss products that might score well. Instead, cast a wide net and let our \
 scoring algorithm find the best option from ALL results.
-- User wants best option overall / best fish / best score → search "fish" \
+- User wants best option overall / best seafood / best score → search "seafood" \
   (NOT a specific species — cast the widest net so scoring can pick the true best)
 - User wants better shrimp → search "shrimp" (NOT "sustainable shrimp" or "MSC shrimp")
 - User wants best salmon → search "salmon" (NOT "wild Alaska sockeye salmon")
@@ -529,6 +536,11 @@ LIVE_CONFIG = types.LiveConnectConfig(
 
 GREETING_TIMEOUT_S = 3.0
 
+# WebSocket close codes (4000-4999 = application-defined, RFC 6455)
+WS_CLOSE_NORMAL = 1000
+WS_CLOSE_GEMINI_EXPIRED = 4000
+WS_CLOSE_SERVER_ERROR = 4001
+
 
 class VoiceSession:
     """Manages a single Gemini Live API voice session over a WebSocket."""
@@ -551,6 +563,13 @@ class VoiceSession:
         self._last_search_time: float = 0.0
         self._last_navigate_url: str = ""
         self._last_navigate_time: float = 0.0
+        self._close_code: int = WS_CLOSE_NORMAL
+        self._close_reason: str = ""
+        self._session_start: float = 0.0  # set when Gemini session connects
+
+    @property
+    def close_code(self) -> int:
+        return self._close_code
 
     async def run(self) -> None:
         try:
@@ -561,6 +580,7 @@ class VoiceSession:
                 model=LIVE_MODEL, config=LIVE_CONFIG
             ) as session:
                 log.info("Gemini Live session connected")
+                self._session_start = time.monotonic()
                 await self.ws.send_json({"type": "status", "state": "listening"})
                 greeting_task = asyncio.create_task(
                     self._send_greeting(session), name="greeting"
@@ -594,12 +614,27 @@ class VoiceSession:
                     await asyncio.gather(
                         greeting_task, *tasks, return_exceptions=True
                     )
+                if self._close_code != WS_CLOSE_NORMAL:
+                    try:
+                        await self.ws.send_json({
+                            "type": "session_end",
+                            "code": self._close_code,
+                            "reason": self._close_reason,
+                        })
+                    except Exception:
+                        pass
         except WebSocketDisconnect:
             log.info("Client disconnected")
         except Exception as e:
             log.error("VoiceSession error: %s", e, exc_info=True)
+            self._close_code = WS_CLOSE_SERVER_ERROR
+            self._close_reason = str(e)
             try:
-                await self.ws.send_json({"type": "error", "message": str(e)})
+                await self.ws.send_json({
+                    "type": "session_end",
+                    "code": self._close_code,
+                    "reason": self._close_reason,
+                })
             except Exception:
                 pass
 
@@ -760,7 +795,9 @@ class VoiceSession:
             # model turn, then the iterator ends on turn_complete.  We must
             # loop to keep receiving subsequent turns.
             while True:
+                turn_had_response = False
                 async for response in session.receive():
+                    turn_had_response = True
                     if response.data:
                         audio_b64 = base64.b64encode(response.data).decode()
                         await self.ws.send_json(
@@ -781,6 +818,36 @@ class VoiceSession:
                                 fc.name,
                                 fc.args,
                             )
+                        # Warmup grace period: reject all tool calls
+                        # in the first few seconds to prevent Gemini
+                        # from acting on greeting context unprompted.
+                        if (
+                            time.monotonic() - self._session_start
+                            < WARMUP_GRACE_S
+                        ):
+                            log.warning(
+                                "Rejected tool calls during warmup: %s",
+                                tool_names,
+                            )
+                            warmup_responses = [
+                                types.FunctionResponse(
+                                    name=fc.name,
+                                    id=fc.id,
+                                    response={
+                                        "error": (
+                                            "Session just started — "
+                                            "wait for the user to speak "
+                                            "before calling tools."
+                                        )
+                                    },
+                                )
+                                for fc in response.tool_call.function_calls
+                            ]
+                            await session.send_tool_response(
+                                warmup_responses
+                            )
+                            continue
+
                         if "search_store" in tool_names:
                             await self.ws.send_json(
                                 {"type": "status", "state": "searching"}
@@ -797,6 +864,7 @@ class VoiceSession:
                             await self.ws.send_json(
                                 {"type": "status", "state": "thinking"}
                             )
+
                         tool_responses: list[types.FunctionResponse] = []
                         for fc in response.tool_call.function_calls:
                             try:
@@ -931,10 +999,17 @@ class VoiceSession:
                         await self.ws.send_json(
                             {"type": "status", "state": "listening"}
                         )
+                if not turn_had_response:
+                    log.info("Gemini session ended (empty receive)")
+                    self._close_code = WS_CLOSE_GEMINI_EXPIRED
+                    self._close_reason = "Gemini session expired"
+                    break
         except WebSocketDisconnect:
             log.info("Client disconnected during Gemini relay")
         except Exception as e:
             log.error("Gemini receive error: %s", e, exc_info=True)
+            self._close_code = WS_CLOSE_GEMINI_EXPIRED
+            self._close_reason = f"Gemini error: {e}"
             try:
                 await self.ws.send_json({"type": "error", "message": str(e)})
             except Exception:

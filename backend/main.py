@@ -140,6 +140,6 @@ async def voice_endpoint(websocket: WebSocket) -> None:
         await session.run()
     finally:
         try:
-            await websocket.close()
+            await websocket.close(code=session.close_code)
         except Exception:
             pass

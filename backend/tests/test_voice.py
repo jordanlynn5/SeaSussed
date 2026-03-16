@@ -17,7 +17,12 @@ from models import (
     ScoreFactor,
     SustainabilityScore,
 )
-from voice_session import _filter_by_intent, _find_product_url, _sort_key_for_intent
+from voice_session import (
+    WS_CLOSE_GEMINI_EXPIRED,
+    _filter_by_intent,
+    _find_product_url,
+    _sort_key_for_intent,
+)
 
 MOCK_BASE64_PNG = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
@@ -134,6 +139,7 @@ def test_voice_websocket_connects_and_stops(mock_get_client: MagicMock) -> None:
 # ── Test 2: Tool call → screenshot → score_result ────────────────────────
 
 
+@patch("voice_session.WARMUP_GRACE_S", 0)
 @patch("voice_session.get_health_info", return_value=None)
 @patch("voice_session.generate_template_content", return_value=("Atlantic cod scores a B.", []))
 @patch("voice_session.compute_score")
@@ -207,6 +213,7 @@ def test_voice_analyze_tool_call(
 # ── Test 3: Screenshot timeout ────────────────────────────────────────────
 
 
+@patch("voice_session.WARMUP_GRACE_S", 0)
 @patch("voice_session.SCREENSHOT_TIMEOUT_S", 0.1)
 @patch("voice_session.get_genai_client")
 def test_voice_screenshot_timeout(mock_get_client: MagicMock) -> None:
@@ -237,6 +244,41 @@ def test_voice_screenshot_timeout(mock_get_client: MagicMock) -> None:
             assert msg == {"type": "status", "state": "speaking"}
 
             # Clean up
+            ws.send_json({"type": "stop"})
+
+
+# ── Test 3b: Warmup grace period rejects tool calls ──────────────────────
+
+
+@patch("voice_session.WARMUP_GRACE_S", 999)  # ensure we're always in warmup
+@patch("voice_session.get_genai_client")
+def test_voice_warmup_rejects_tool_calls(mock_get_client: MagicMock) -> None:
+    """Tool calls during warmup grace period should be rejected."""
+    session = MockSession(responses=[_make_tool_call_response()])
+    mock_get_client.return_value = _mock_genai_client(session)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/voice") as ws:
+            # 1. connecting
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "connecting"}
+
+            # 2. listening
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "listening"}
+
+            # The tool call should be rejected during warmup — no
+            # analyzing status or request_screenshot should appear.
+            # Next message will be a keepalive ping (not a tool action).
+            msg = ws.receive_json()
+            assert msg["type"] == "ping"
+
+            # Verify the rejection was sent back to Gemini
+            session.send_tool_response.assert_called_once()
+            rejected = session.send_tool_response.call_args[0][0]
+            assert len(rejected) == 1
+            assert "error" in rejected[0].response
+
             ws.send_json({"type": "stop"})
 
 
@@ -278,6 +320,7 @@ def _make_search_tool_call(query: str = "salmon") -> types.LiveServerMessage:
     )
 
 
+@patch("voice_session.WARMUP_GRACE_S", 0)
 @patch("voice_session.analyze_screenshot", new_callable=AsyncMock)
 @patch("voice_session.get_genai_client")
 def test_voice_duplicate_search_suppressed(
@@ -592,3 +635,95 @@ def test_sort_key_generic_better() -> None:
 
 def test_sort_key_overall() -> None:
     assert _sort_key_for_intent("show me the most sustainable option overall") == "score"
+
+
+# ── Tests: WebSocket close code propagation ────────────────────────────────
+
+
+class MockSessionError(MockSession):
+    """Mock Gemini session whose receive() raises an exception."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+        raise self._error
+        yield  # pragma: no cover
+
+
+class MockSessionExpired(MockSession):
+    """Mock Gemini session whose receive() yields nothing (empty turn)."""
+
+    async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+        # Yield nothing — simulates Gemini session expiry
+        return
+        yield  # pragma: no cover
+
+
+@patch("voice_session.get_genai_client")
+def test_voice_close_code_on_user_stop(mock_get_client: MagicMock) -> None:
+    """Normal stop: close code should be 1000 (WS_CLOSE_NORMAL)."""
+    session = MockSession()
+    mock_get_client.return_value = _mock_genai_client(session)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/voice") as ws:
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "connecting"}
+
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "listening"}
+
+            ws.send_json({"type": "stop"})
+            # Connection closes cleanly — no session_end message expected
+
+
+@patch("voice_session.get_genai_client")
+def test_voice_session_end_on_gemini_error(mock_get_client: MagicMock) -> None:
+    """Gemini receive() raises RuntimeError: client gets session_end with code 4000."""
+    session = MockSessionError(RuntimeError("Gemini internal error"))
+    mock_get_client.return_value = _mock_genai_client(session)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/voice") as ws:
+            # 1. connecting
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "connecting"}
+
+            # 2. listening
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "listening"}
+
+            # 3. error message from Gemini receive failure
+            msg = ws.receive_json()
+            assert msg["type"] == "error"
+
+            # 4. session_end with Gemini expired code
+            msg = ws.receive_json()
+            assert msg["type"] == "session_end"
+            assert msg["code"] == WS_CLOSE_GEMINI_EXPIRED
+            assert "Gemini" in msg["reason"]
+
+
+@patch("voice_session.get_genai_client")
+def test_voice_session_end_on_gemini_expiry(mock_get_client: MagicMock) -> None:
+    """Gemini receive() yields nothing (empty turn): client gets session_end with code 4000."""
+    session = MockSessionExpired()
+    mock_get_client.return_value = _mock_genai_client(session)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/voice") as ws:
+            # 1. connecting
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "connecting"}
+
+            # 2. listening
+            msg = ws.receive_json()
+            assert msg == {"type": "status", "state": "listening"}
+
+            # 3. session_end with Gemini expired code
+            msg = ws.receive_json()
+            assert msg["type"] == "session_end"
+            assert msg["code"] == WS_CLOSE_GEMINI_EXPIRED
+            assert msg["reason"] == "Gemini session expired"
