@@ -55,7 +55,9 @@ const CERT_DEFINITIONS = {
 let currentResult = null;
 let voiceClient = null;
 let pendingVoiceData = null; // held while mic-permission popup is open
+let _lastVoiceData = null;
 let _pendingScoreReveal = null; // held until 'complete' phase arrives
+let _analyzeController = null; // AbortController for in-flight /analyze/stream fetch
 
 // Build animation timers (cancelled if new data arrives mid-animation)
 let _buildTimers = [];
@@ -120,17 +122,30 @@ function updateVoiceBar(state) {
   const dot = document.getElementById('voice-bar-indicator');
   const status = document.getElementById('voice-bar-status');
   if (!dot || !status) return;
-  const thinkingStates = ['thinking', 'searching', 'analyzing', 'navigating'];
+
+  if (state === 'expired' || state === 'disconnected') {
+    dot.className = 'vbar-dot';
+    const msg = state === 'expired' ? 'Session expired' : 'Connection lost';
+    status.innerHTML = `${msg} &mdash; <button id="voice-reconnect-btn" class="vbar-reconnect">Reconnect</button>`;
+    document.getElementById('voice-reconnect-btn')?.addEventListener('click', () => {
+      stopVoiceBar();
+      if (_lastVoiceData) connectVoice(_lastVoiceData);
+    });
+    return;
+  }
+
+  const thinkingStates = ['thinking', 'searching', 'analyzing', 'navigating', 'reconnecting'];
   const dotClass = state === 'speaking' ? ' speaking'
     : thinkingStates.includes(state) ? ' thinking' : '';
   dot.className = 'vbar-dot' + dotClass;
   const labels = {
-    listening: 'Listening…',
-    thinking: 'Thinking…',
-    searching: 'Searching the store…',
-    analyzing: 'Analyzing product…',
-    navigating: 'Opening product page…',
-    speaking: 'Speaking…',
+    listening: 'Listening\u2026',
+    thinking: 'Thinking\u2026',
+    searching: 'Searching the store\u2026',
+    analyzing: 'Analyzing product\u2026',
+    navigating: 'Opening product page\u2026',
+    speaking: 'Speaking\u2026',
+    reconnecting: 'Reconnecting\u2026',
   };
   if (labels[state]) status.textContent = labels[state];
   // Audio cue so user knows something is happening during silence
@@ -151,6 +166,7 @@ async function connectVoice(data, preStream = null) {
     if (preStream) preStream.getTracks().forEach(t => t.stop());
     return;
   }
+  _lastVoiceData = data;
   voiceClient = new VoiceClient();
   voiceClient.onStatus = updateVoiceBar;
   voiceClient.onScoreResult = (score) => {
@@ -234,6 +250,13 @@ function _setAnalyzeBtnsDisabled(disabled) {
 // ── Analyze ──
 async function triggerAnalyze() {
   _cancelBuild();
+
+  // Abort any in-flight analysis before starting a new one
+  if (_analyzeController) {
+    _analyzeController.abort();
+    _analyzeController = null;
+  }
+
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
 
@@ -246,7 +269,14 @@ async function triggerAnalyze() {
   document.getElementById('food-miles-card').style.display = 'none';
 
   // Start voice immediately — Gemini greets while analysis runs
-  startVoiceAfterResult({ analyzing: true });
+  if (!voiceClient) {
+    startVoiceAfterResult({ analyzing: true });
+  }
+
+  _analyzeController = new AbortController();
+  const signal = _analyzeController.signal;
+  // Auto-timeout after 60s
+  const timeout = setTimeout(() => _analyzeController?.abort(), 60000);
 
   try {
     // Step 1: Capture screenshot + gallery images + DOM text via background.js
@@ -260,6 +290,8 @@ async function triggerAnalyze() {
         }
       );
     });
+
+    if (signal.aborted) return;
 
     setLoadingStatus('Identifying product…');
 
@@ -276,7 +308,7 @@ async function triggerAnalyze() {
         related_products: pageData.relatedProducts,
         related_products_with_urls: pageData.relatedProductsWithUrls ?? [],
       }),
-      signal: AbortSignal.timeout(60000),
+      signal,
     });
 
     if (!response.ok) {
@@ -289,27 +321,36 @@ async function triggerAnalyze() {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || ''; // keep incomplete line in buffer
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // keep incomplete line in buffer
 
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const data = JSON.parse(line.slice(6));
-          handleSSEEvent(data, pageData);
-        } catch (parseErr) {
-          console.warn('[SeaSussed] SSE JSON parse error:', parseErr, line);
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            handleSSEEvent(data, pageData);
+          } catch (parseErr) {
+            console.warn('[SeaSussed] SSE JSON parse error:', parseErr, line);
+          }
         }
       }
+    } finally {
+      reader.releaseLock();
     }
   } catch (err) {
-    showError(err.message);
+    // Silently ignore aborts from a superseding triggerAnalyze() call
+    if (err.name === 'AbortError') return;
+    showError('Analysis failed — please try again.');
+    console.error('[SeaSussed] triggerAnalyze error:', err);
   } finally {
+    clearTimeout(timeout);
+    _analyzeController = null;
     _setAnalyzeBtnsDisabled(false);
   }
 }
@@ -621,21 +662,10 @@ function renderScorePhase(data) {
   // Score reveal is deferred until 'complete' phase arrives
   _pendingScoreReveal = { score, grade, color };
 
-  // Send score to active voice session, or start voice as fallback
-  if (voiceClient) {
-    const update = {
-      phase: 'scored',
-      score,
-      grade,
-      species: product_info.species,
-      wild_or_farmed: product_info.wild_or_farmed,
-      origin_region: product_info.origin_region,
-      fishing_method: product_info.fishing_method,
-      explanation: data.explanation,
-    };
-    if (_latestHealth) update.health = _latestHealth;
-    voiceClient.sendContextUpdate(update);
-  } else {
+  // Start voice if not already connected — skip "scored" context update
+  // to avoid Gemini speaking twice (once for scored, once for complete).
+  // The "complete" phase (line ~455) sends the final score to Gemini.
+  if (!voiceClient) {
     startVoiceAfterResult({ score, grade, product_info });
   }
 }
@@ -983,7 +1013,9 @@ function renderResult(data) {
   if (data.food_miles) renderFoodMilesCard(data.food_miles);
 
   showView('view-result');
-  startVoiceAfterResult(data);
+  if (!voiceClient) {
+    startVoiceAfterResult(data);
+  }
 }
 
 // ── Cert popover ──
