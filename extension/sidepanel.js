@@ -8,6 +8,12 @@ const GRADE_EMOJI  = { A: '🟢', B: '🟡', C: '🟠', D: '🔴' };
 const BREAKDOWN_MAX = { biological: 20, practices: 25, management: 30, ecological: 25 };
 const SCORE_FILL_COLOR = { A: '#16a34a', B: '#ca8a04', C: '#ea580c', D: '#dc2626' };
 
+/** Escape a string for safe insertion into innerHTML. */
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 // Cert definitions (static — never Gemini-generated)
 const CERT_DEFINITIONS = {
   'MSC': {
@@ -369,16 +375,16 @@ function renderHealthCard(health) {
   const color = gradeColors[health.health_grade] || '#6b7280';
 
   let html = `<div style="font-weight:600; color:${color}; margin-bottom:4px;">`;
-  html += `${health.mercury_category}`;
+  html += `${escapeHtml(health.mercury_category)}`;
   if (health.mercury_ppm != null) {
-    html += ` <span style="font-weight:400; color:#9ca3af;">(${health.mercury_ppm} ppm mercury)</span>`;
+    html += ` <span style="font-weight:400; color:#9ca3af;">(${escapeHtml(String(health.mercury_ppm))} ppm mercury)</span>`;
   }
   html += `</div>`;
   if (health.omega3_note) {
-    html += `<div>${health.omega3_note}</div>`;
+    html += `<div>${escapeHtml(health.omega3_note)}</div>`;
   }
   if (health.serving_advice) {
-    html += `<div style="color:#6b7280; font-size:12px; margin-top:2px;">${health.serving_advice}</div>`;
+    html += `<div style="color:#6b7280; font-size:12px; margin-top:2px;">${escapeHtml(health.serving_advice)}</div>`;
   }
   body.innerHTML = html;
   card.style.display = '';
@@ -392,12 +398,12 @@ function renderFoodMilesCard(foodMiles) {
   const distFormatted = foodMiles.distance_miles.toLocaleString();
 
   let html = `<div style="font-weight:600; margin-bottom:4px;">`;
-  html += `~${distFormatted} miles`;
+  html += `~${escapeHtml(distFormatted)} miles`;
   html += `</div>`;
   html += `<div style="color:#6b7280; font-size:12px;">`;
-  html += `${foodMiles.origin} → ${foodMiles.destination}`;
+  html += `${escapeHtml(foodMiles.origin)} → ${escapeHtml(foodMiles.destination)}`;
   html += `</div>`;
-  html += `<div style="color:#9ca3af; font-size:11px; margin-top:4px;">Source: ${foodMiles.source}</div>`;
+  html += `<div style="color:#9ca3af; font-size:11px; margin-top:4px;">Source: ${escapeHtml(foodMiles.source)}</div>`;
   body.innerHTML = html;
   card.style.display = '';
 }
@@ -618,10 +624,10 @@ function renderScorePhase(data) {
       if (item.explanation) {
         row.classList.add('breakdown-row');
         const tipHtml = item.tip
-          ? `<div class="breakdown-tip">\u{1f4a1} ${item.tip}</div>` : '';
+          ? `<div class="breakdown-tip">\u{1f4a1} ${escapeHtml(item.tip)}</div>` : '';
         row.innerHTML = `
           <div class="breakdown-header">
-            <span class="score-label">${item.label}</span>
+            <span class="score-label">${escapeHtml(item.label)}</span>
             <div style="display:flex; align-items:center; gap:8px;">
               <div class="score-bar-wrap">
                 <div class="score-bar" style="width:0%; background:${barColor};"></div>
@@ -631,7 +637,7 @@ function renderScorePhase(data) {
             </div>
           </div>
           <div class="breakdown-detail">
-            ${item.explanation}
+            ${escapeHtml(item.explanation)}
             ${tipHtml}
           </div>`;
         row.querySelector('.breakdown-header').addEventListener('click', () => {
@@ -640,7 +646,7 @@ function renderScorePhase(data) {
       } else {
         row.classList.add('score-row');
         row.innerHTML = `
-          <span class="score-label">${item.label}</span>
+          <span class="score-label">${escapeHtml(item.label)}</span>
           <div style="display:flex; align-items:center; gap:8px;">
             <div class="score-bar-wrap">
               <div class="score-bar" style="width:0%; background:${barColor};"></div>
@@ -762,9 +768,9 @@ function renderProductList(products, summary, urlMap = []) {
     if (product.species)
       metaHtml += `<span class="tag">${product.species}</span>`;
     if (product.wild_or_farmed && product.wild_or_farmed !== 'unknown')
-      metaHtml += `<span class="tag">${product.wild_or_farmed}</span>`;
+      metaHtml += `<span class="tag">${escapeHtml(product.wild_or_farmed)}</span>`;
     if (product.certifications?.length > 0)
-      product.certifications.forEach(c => { metaHtml += `<span class="tag cert">${c}</span>`; });
+      product.certifications.forEach(c => { metaHtml += `<span class="tag cert">${escapeHtml(c)}</span>`; });
 
     // Breakdown bars
     const bd = product.breakdown;
@@ -790,15 +796,15 @@ function renderProductList(products, summary, urlMap = []) {
     }).join('');
 
     const priceHtml = product.price
-      ? `<div class="list-price">${product.price}</div>` : '';
+      ? `<div class="list-price">${escapeHtml(product.price)}</div>` : '';
 
     const productUrl = product.url || _findUrl(product.product_name, urlMap);
 
     item.innerHTML = `
       <div class="list-header${productUrl ? ' list-header-clickable' : ''}">
-        <div class="list-grade-circle" style="background:${color}">${product.grade}</div>
+        <div class="list-grade-circle" style="background:${color}">${escapeHtml(product.grade)}</div>
         <div class="list-product-body">
-          <div class="list-product-name" title="${product.product_name}">${product.product_name}</div>
+          <div class="list-product-name" title="${escapeHtml(product.product_name)}">${escapeHtml(product.product_name)}</div>
           <div class="list-product-meta">${metaHtml}</div>
         </div>
         <div style="text-align:right; flex-shrink:0;">
@@ -895,15 +901,15 @@ function renderResult(data) {
   const tagsEl = document.getElementById('extraction-tags');
   tagsEl.innerHTML = '';
   if (product_info.species)
-    tagsEl.innerHTML += `<span class="tag">${product_info.species}</span>`;
+    tagsEl.innerHTML += `<span class="tag">${escapeHtml(product_info.species)}</span>`;
   if (product_info.wild_or_farmed !== 'unknown')
-    tagsEl.innerHTML += `<span class="tag">${product_info.wild_or_farmed}</span>`;
+    tagsEl.innerHTML += `<span class="tag">${escapeHtml(product_info.wild_or_farmed)}</span>`;
   if (product_info.origin_region)
-    tagsEl.innerHTML += `<span class="tag">${product_info.origin_region}</span>`;
+    tagsEl.innerHTML += `<span class="tag">${escapeHtml(product_info.origin_region)}</span>`;
   if (product_info.fishing_method)
-    tagsEl.innerHTML += `<span class="tag">${product_info.fishing_method}</span>`;
+    tagsEl.innerHTML += `<span class="tag">${escapeHtml(product_info.fishing_method)}</span>`;
   product_info.certifications?.forEach(c =>
-    tagsEl.innerHTML += `<span class="tag cert" data-cert="${c}">${c}</span>`);
+    tagsEl.innerHTML += `<span class="tag cert" data-cert="${escapeHtml(c)}">${escapeHtml(c)}</span>`);
 
   tagsEl.querySelectorAll('.tag.cert').forEach(tag => {
     tag.addEventListener('click', (e) => showCertPopover(tag.dataset.cert, e));
@@ -919,11 +925,11 @@ function renderResult(data) {
       const pct = Math.round((factor.score / factor.max_score) * 100);
       const barColor = pct >= 70 ? '#22c55e' : pct >= 45 ? '#eab308' : '#ef4444';
       const tipHtml = factor.tip
-        ? `<div class="breakdown-tip">💡 ${factor.tip}</div>` : '';
+        ? `<div class="breakdown-tip">💡 ${escapeHtml(factor.tip)}</div>` : '';
       return `
         <div class="breakdown-row">
           <div class="breakdown-header">
-            <span class="score-label">${factor.category}</span>
+            <span class="score-label">${escapeHtml(factor.category)}</span>
             <div style="display:flex; align-items:center; gap:8px;">
               <div class="score-bar-wrap">
                 <div class="score-bar" style="width:${pct}%; background:${barColor};"></div>
@@ -933,7 +939,7 @@ function renderResult(data) {
             </div>
           </div>
           <div class="breakdown-detail">
-            ${factor.explanation}
+            ${escapeHtml(factor.explanation)}
             ${tipHtml}
           </div>
         </div>`;
@@ -988,11 +994,11 @@ function renderResult(data) {
       return `
         <div class="alt-row">
           <div>
-            <div class="alt-name">${alt.species}</div>
-            <div class="alt-reason">${alt.reason}</div>
+            <div class="alt-name">${escapeHtml(alt.species)}</div>
+            <div class="alt-reason">${escapeHtml(alt.reason)}</div>
             ${fromPageNote}
           </div>
-          <span class="alt-badge" style="background:${altColor}">${alt.grade}</span>
+          <span class="alt-badge" style="background:${altColor}">${escapeHtml(alt.grade)}</span>
         </div>`;
     }).join('');
 
