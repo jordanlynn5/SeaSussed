@@ -29,6 +29,8 @@ app.add_middleware(
 _request_times: dict[str, list[float]] = defaultdict(list)
 _RATE_LIMIT = 10
 _RATE_WINDOW = 60.0
+_PRUNE_INTERVAL = 300.0  # prune stale IPs every 5 minutes
+_last_prune_time: float = 0.0
 
 
 def _get_client_ip(request: Request) -> str:
@@ -46,8 +48,23 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+def _prune_stale_ips(now: float) -> None:
+    """Remove IPs with no recent requests to prevent unbounded memory growth."""
+    global _last_prune_time
+    if now - _last_prune_time < _PRUNE_INTERVAL:
+        return
+    _last_prune_time = now
+    stale = [
+        ip for ip, times in _request_times.items()
+        if not times or now - times[-1] >= _RATE_WINDOW
+    ]
+    for ip in stale:
+        del _request_times[ip]
+
+
 def _check_rate_limit(ip: str) -> None:
     now = time()
+    _prune_stale_ips(now)
     _request_times[ip] = [t for t in _request_times[ip] if now - t < _RATE_WINDOW]
     if len(_request_times[ip]) >= _RATE_LIMIT:
         raise HTTPException(
@@ -69,19 +86,25 @@ async def analyze(request: Request, body: AnalyzeRequest) -> AnalyzeResponse:
     ip = _get_client_ip(request)
     _check_rate_limit(ip)
 
-    page_analysis = await analyze_screenshot(
-        body.screenshot,
-        body.url,
-        body.page_title,
-        page_text=body.page_text,
-        product_images=body.product_images,
-    )
-    return await analyze_page(
-        page_analysis,
-        body.related_products,
-        client_ip=ip,
-        related_products_with_urls=body.related_products_with_urls,
-    )
+    try:
+        page_analysis = await analyze_screenshot(
+            body.screenshot,
+            body.url,
+            body.page_title,
+            page_text=body.page_text,
+            product_images=body.product_images,
+        )
+        return await analyze_page(
+            page_analysis,
+            body.related_products,
+            client_ip=ip,
+            related_products_with_urls=body.related_products_with_urls,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("/analyze failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="Analysis failed. Please try again.") from exc
 
 
 @app.post("/analyze/stream")
@@ -120,7 +143,8 @@ async def analyze_stream(request: Request, body: AnalyzeRequest) -> StreamingRes
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             log.error("SSE stream error: %s", exc, exc_info=True)
-            yield f"data: {json.dumps({'phase': 'error', 'message': str(exc)})}\n\n"
+            err = {"phase": "error", "message": "Analysis failed. Please try again."}
+            yield f"data: {json.dumps(err)}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
